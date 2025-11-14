@@ -1,0 +1,306 @@
+# Configuration for Hull Tactical Market Prediction
+
+# Random Seed
+seed: 42
+
+# Data Configuration
+data:
+  train_path: "data/raw/train.csv"
+  test_path: "data/raw/test.csv"
+  # Train/Validation split ratio
+  train_val_split: 0.8
+  # Date column
+  date_col: "date_id"
+
+# Feature Engineering
+features:
+  # Rolling window sizes (in days)
+  rolling_windows: [5, 10, 20, 40, 60]
+  # Lag features
+  lag_periods: [1, 2, 3, 5, 10]
+  # Feature groups
+  groups:
+    market: ["M*"]  # Market/Technical indicators
+    economic: ["E*"]  # Economic indicators
+    interest: ["I*"]  # Interest rate indicators
+    price: ["P*"]  # Price/Valuation indicators
+    volatility: ["V*"]  # Volatility indicators
+    sentiment: ["S*"]  # Sentiment indicators
+    dummy: ["D*"]  # Dummy/Event flags
+
+# Missing Value Handling
+missing:
+  # Forward fill limits (for E/I/P groups) (in days)
+  forward_fill_limit: 5
+  # Fallback strategy: 'median', 'mean', 'zero'
+  fallback_strategy: "median"
+
+# Scaling
+scaling:
+  # Scaler type: 'robust', 'standard', 'minmax'
+  scaler_type: "robust"
+  # Scale by feature groups
+  scale_by_group: true
+
+# Cross Validation
+cv:
+  # Number of folds
+  n_splits: 5
+  # Embargo period (days)
+  embargo: 5
+  # Purge overlapping periods
+  purge: true
+  # Purge period (days) - number of days to remove from train end
+  # Options: 10, 15, 20
+  purge_period: 15
+  # Train/validation ratio per fold
+  train_ratio: 0.8
+
+# Model Configuration - Return Predictor
+model_return:
+  lightgbm:
+    boosting_type: "gbdt"
+    objective: "regression"
+    metric: "rmse"
+    num_leaves: 31
+    learning_rate: 0.05
+    feature_fraction: 0.8
+    bagging_fraction: 0.8
+    bagging_freq: 5
+    max_depth: -1
+    min_child_samples: 20
+    n_estimators: 1000
+    random_state: 42
+    verbosity: -1
+    early_stopping_rounds: 50
+    # GPU settings (auto-configured based on environment)
+    device_type: "cpu"  # Will be overridden: 'gpu' (Kaggle), 'cpu' (fallback)
+    device: "cpu"  # Deprecated but kept for compatibility
+  
+  catboost:
+    iterations: 1000
+    learning_rate: 0.05
+    depth: 6
+    l2_leaf_reg: 3
+    random_seed: 42
+    verbose: false
+    early_stopping_rounds: 50
+
+# Position Mapping Strategy
+position:
+  # Strategy type: 'sharpe_scaling', 'quantile', 'vol_targeting'
+  strategy: "sharpe_scaling"
+  
+  # Sharpe scaling parameters
+  sharpe_scaling:
+    k: 1.0  # Scaling factor
+    b: 2.0  # Sensitivity parameter
+    eps: 1e-6  # Small constant to avoid division by zero
+  
+  # Quantile-based parameters
+  quantile:
+    n_bins: 7
+    allocations: [0.0, 0.3, 0.6, 1.0, 1.4, 1.7, 2.0]
+  
+  # Volatility targeting parameters
+  vol_targeting:
+    target_vol: 1.0  # Target volatility relative to market
+    max_daily_change: 0.3  # Maximum daily position change
+  
+  # Constraints
+  constraints:
+    min_allocation: 0.0
+    max_allocation: 2.0
+    max_vol_ratio: 1.2  # Max strategy_vol / market_vol
+    max_leverage_pct: 0.10  # Max 10% of days with 2x leverage
+
+# Ensemble Configuration
+ensemble:
+  # Ensemble method: 'weighted_average', 'stacking', 'blending'
+  method: "weighted_average"
+  # Model weights (must sum to 1.0)
+  weights:
+    lgbm: 0.6
+    catboost: 0.4
+  # Time-based weighting (give more weight to recent periods)
+  time_decay: 0.95
+
+# Evaluation Metrics
+metric:
+  # Volatility penalty threshold
+  vol_threshold: 1.2
+  # Apply underperformance penalty
+  underperformance_penalty: false
+  # Minimum periods for valid metric calculation
+  min_periods: 30
+  # Rolling window for time-series metrics (trading days)
+  rolling_window: 252  # ~1 year
+
+# Additional Metrics
+metrics:
+  # Primary metric
+  primary: "custom_sharpe"
+  # Volatility penalty threshold (deprecated, use metric.vol_threshold)
+  vol_penalty_threshold: 1.2
+  # Underperformance check (deprecated, use metric.underperformance_penalty)
+  check_underperformance: true
+
+# Backtesting Configuration
+backtest:
+  # Transaction cost in basis points (1 bp = 0.01%)
+  transaction_cost_bps: 5.0
+  # Slippage cost in basis points (1 bp = 0.01%)
+  slippage_bps: 2.0
+  # Forward-looking bias detection
+  check_bias: true
+  # Apply transaction costs in evaluation
+  apply_costs: true
+
+# Hyperparameter Tuning Configuration
+tuning:
+  lightgbm:
+    # Fixed parameters (not tuned)
+    fixed_params:
+      boosting_type: "gbdt"
+      objective: "regression"
+      metric: "rmse"
+      verbosity: -1
+      random_state: 42
+    
+    # Parameter search space
+    param_space:
+      num_leaves:
+        type: "int"
+        low: 20
+        high: 100
+      learning_rate:
+        type: "float"
+        low: 0.01
+        high: 0.3
+        log: true
+      feature_fraction:
+        type: "float"
+        low: 0.6
+        high: 1.0
+      bagging_fraction:
+        type: "float"
+        low: 0.6
+        high: 1.0
+      bagging_freq:
+        type: "int"
+        low: 1
+        high: 10
+      min_child_samples:
+        type: "int"
+        low: 10
+        high: 100
+      max_depth:
+        type: "int"
+        low: 3
+        high: 12
+      reg_alpha:
+        type: "float"
+        low: 0.00000001
+        high: 10.0
+        log: true
+      reg_lambda:
+        type: "float"
+        low: 0.00000001
+        high: 10.0
+        log: true
+
+# Risk Model Configuration
+risk:
+  # Risk label parameters
+  label:
+    # Window size for rolling std calculation (future volatility)
+    window: 20
+    # Minimum periods required for rolling calculation
+    min_periods: 10
+    # Clip extreme values (MAD threshold)
+    clip_threshold: 4.0
+  
+  # Risk model type: 'lightgbm', 'garch', 'ensemble'
+  model_type: "lightgbm"
+  
+  # LightGBM risk model parameters
+  lightgbm:
+    # Fixed parameters
+    fixed_params:
+      objective: "regression"
+      metric: "rmse"
+      verbosity: -1
+      random_state: 42
+      # GPU settings (auto-configured based on environment)
+      device: "cpu"  # Will be overridden: 'gpu' (Kaggle), 'mps' (Mac), 'cpu' (fallback)
+      gpu_use_dp: false
+      # Risk-specific parameters
+      min_data_in_leaf: 20
+      lambda_l1: 0.1
+      lambda_l2: 0.1
+    
+    # Parameter search space for tuning
+    param_space:
+      num_leaves:
+        type: "int"
+        low: 15
+        high: 80
+      learning_rate:
+        type: "float"
+        low: 0.01
+        high: 0.2
+        log: true
+      feature_fraction:
+        type: "float"
+        low: 0.5
+        high: 0.9
+      bagging_fraction:
+        type: "float"
+        low: 0.6
+        high: 0.95
+      bagging_freq:
+        type: "int"
+        low: 1
+        high: 7
+      max_depth:
+        type: "int"
+        low: 3
+        high: 10
+      reg_alpha:
+        type: "float"
+        low: 0.0001
+        high: 5.0
+        log: true
+      reg_lambda:
+        type: "float"
+        low: 0.0001
+        high: 5.0
+        log: true
+  
+  # Calibration parameters
+  calibration:
+    # Bins for calibration plot
+    n_bins: 10
+    # Strategy: 'quantile' or 'uniform'
+    strategy: "quantile"
+    # Minimum samples per bin
+    min_samples_per_bin: 50
+
+# Hyperparameter Optimization
+optuna:
+  n_trials: 100  # Number of optimization trials
+  timeout: 3600  # 1 hour
+  n_jobs: -1     # Use all available cores
+
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/experiment.log"
+
+# Paths
+paths:
+  artifacts: "artifacts/"
+  models: "models/"
+  submissions: "submissions/"
+  logs: "logs/"

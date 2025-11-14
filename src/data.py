@@ -117,7 +117,7 @@ class DataLoader:
             
             for col in group_features:
                 missing_count = df[col].isna().sum()
-                if missing_count > 0:
+                if missing_count > (len(df[col])*0.2):
                     missing_info.append({
                         'feature': col,
                         'group': group,
@@ -184,6 +184,7 @@ class DataLoader:
                 features_to_normalize.extend([f for f in features if f in df.columns])
         else:
             # Normalize all numeric features
+            # exclude_cols 칼럼들은 정규화 안하는 칼럼들.
             features_to_normalize = [c for c in numeric_cols if c not in exclude_cols]
         
         if method == 'rank_gauss':

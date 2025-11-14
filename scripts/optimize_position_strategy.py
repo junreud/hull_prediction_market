@@ -852,8 +852,7 @@ class PositionStrategyOptimizer:
             logger.info("✓ Validation passed")
             
             # Save submission
-            output_path = Path("submissions/submission.parquet")
-            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path = Path("submission.parquet")
             submission.to_parquet(output_path, index=False, engine='pyarrow')
             
             logger.info(f"\n✓ Submission saved to {output_path}")

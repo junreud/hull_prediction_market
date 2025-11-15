@@ -51,6 +51,21 @@ class DataLoader:
         self.train_df = None
         self.test_df = None
         
+    def __exclude_cols(target: str|None = None) -> list:
+        ''' 
+        정규화 안하는 칼럼들.
+        '''
+
+        cols = ['date_id' 'risk_free_rate',
+                'market_forward_excess_returns', 'is_scored']
+        if target:
+            cols.append(target)
+        else:
+            cols.append('forward_returns')
+
+        return cols
+
+
     def load_data(
         self, 
         train_path: Optional[str] = None, 
@@ -173,8 +188,6 @@ class DataLoader:
         
         # Get numeric columns (exclude date_id and target)
         numeric_cols = df.select_dtypes(include=[np.number]).columns
-        exclude_cols = ['date_id', 'forward_returns', 'risk_free_rate',
-                       'market_forward_excess_returns', 'is_scored']
         
         if by_group:
             # Normalize by feature group
@@ -184,8 +197,7 @@ class DataLoader:
                 features_to_normalize.extend([f for f in features if f in df.columns])
         else:
             # Normalize all numeric features
-            # exclude_cols 칼럼들은 정규화 안하는 칼럼들.
-            features_to_normalize = [c for c in numeric_cols if c not in exclude_cols]
+            features_to_normalize = [c for c in numeric_cols if c not in self.__exclude_cols()]
         
         if method == 'rank_gauss':
             # Rank transformation → Gaussian distribution
@@ -198,10 +210,11 @@ class DataLoader:
                     # Rank transformation (0 to 1)
                     ranks = rankdata(values, method='average')
                     # Avoid exactly 0 and 1 (for erfinv)
-                    ranks = (ranks - 0.5) / len(ranks)
+                    ranks = (ranks - 0.5) / len(ranks) # 분위수
                     
                     # Convert to Gaussian using inverse error function
                     # erfinv maps uniform [0,1] to normal distribution
+                    # erf() = error function(오차함수), erfinv() = 오차함수의 역함수 : 누적확률 -> 정규분포값 
                     normalized = np.sqrt(2) * erfinv(2 * ranks - 1)
                     
                     df.loc[valid_mask, col] = normalized
@@ -226,6 +239,7 @@ class DataLoader:
             # Rolling z-score (time-series aware)
             for col in features_to_normalize:
                 if df[col].notna().sum() > 0:
+                    # center=False : 미래 데이터 사용 X
                     rolling_mean = df[col].rolling(window=window, min_periods=20, center=False).mean()
                     rolling_std = df[col].rolling(window=window, min_periods=20, center=False).std()
                     
@@ -257,7 +271,7 @@ class DataLoader:
 
         시계열을 위한 개선된 방법:
         - 'rolling': 이동 윈도우 백분위수 (지역 기준선)
-        - 'global': 전역 백분위수 (레거시 방법)
+        - 'global': 전역(전체 기간) 백분위수 (레거시 방법)
         
         Args:
             df: 처리할 데이터프레임
@@ -272,9 +286,7 @@ class DataLoader:
         
         # Get numeric columns (exclude date_id and target)
         numeric_cols = df.select_dtypes(include=[np.number]).columns
-        exclude_cols = ['date_id', 'forward_returns', 'risk_free_rate',
-                       'market_forward_excess_returns', 'is_scored']
-        numeric_cols = [c for c in numeric_cols if c not in exclude_cols]
+        numeric_cols = [c for c in numeric_cols if c not in self.__exclude_cols()]
         
         if method == 'rolling':
             # Rolling window winsorization (time-series aware)
@@ -302,7 +314,9 @@ class DataLoader:
             # Global winsorization (legacy method)
             for col in numeric_cols:
                 if df[col].notna().sum() > 0:
-                    df[col] = stats.mstats.winsorize(df[col].values, limits=limits)
+                    lower = df[col].quantile(limits[0])
+                    upper = df[col].quantile(1 - limits[1])
+                    df[col] = df[col].clip(lower, upper)
             
             logger.info(f"Global winsorization complete with limits {limits}")
         
@@ -666,9 +680,7 @@ class DataLoader:
         
         # Get numeric features (exclude date_id and target)
         numeric_cols = df.select_dtypes(include=[np.number]).columns
-        exclude_cols = ['date_id', target, 'risk_free_rate', 
-                       'market_forward_excess_returns', 'is_scored']
-        features_to_test = [c for c in numeric_cols if c not in exclude_cols]
+        features_to_test = [c for c in numeric_cols if c not in self.__exclude_cols(target)]
         
         results = []
         
@@ -1004,9 +1016,7 @@ class DataLoader:
         else:
             # Scale all numeric features together
             numeric_cols = df.select_dtypes(include=[np.number]).columns
-            exclude_cols = ['date_id', 'forward_returns', 'risk_free_rate', 
-                           'market_forward_excess_returns', 'is_scored']
-            scale_cols = [c for c in numeric_cols if c not in exclude_cols and not c.startswith('D')]
+            scale_cols = [c for c in numeric_cols if c not in self.__exclude_cols() and not c.startswith('D')]
             
             scaler = scaler_class()
             scaler.fit(fit_df[scale_cols].fillna(0))

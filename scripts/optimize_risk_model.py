@@ -61,7 +61,6 @@ class RiskModelOptimizer:
         # Components
         self.data_loader = DataLoader(config_path)
         self.feature_engineer = FeatureEngineering(config_path)
-        self.metric_calc = CompetitionMetric()
         
         # Risk labeler
         risk_config = self.config.get('risk', {}).get('label', {})

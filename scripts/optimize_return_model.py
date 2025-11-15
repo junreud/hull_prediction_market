@@ -59,7 +59,6 @@ class ReturnModelOptimizer:
         # Components
         self.data_loader = DataLoader(config_path)
         self.feature_engineer = FeatureEngineering(config_path)
-        self.metric_calc = CompetitionMetric()
         
         # Results storage
         self.results = {}
@@ -130,12 +129,7 @@ class ReturnModelOptimizer:
         self,
         df: pd.DataFrame,
         add_time_features: bool = True,
-        add_regime_features: bool = True,
-        create_rolling: bool = True,
-        create_lag: bool = True,
-        create_diff: bool = True,
-        create_interaction: bool = True,
-        create_technical: bool = True
+        add_regime_features: bool = True
     ) -> pd.DataFrame:
         """
         Step 2: Feature engineering.
@@ -148,16 +142,6 @@ class ReturnModelOptimizer:
             Add time period features
         add_regime_features : bool
             Add market regime features
-        create_rolling : bool
-            Create rolling features
-        create_lag : bool
-            Create lag features
-        create_diff : bool
-            Create difference features
-        create_interaction : bool
-            Create interaction features
-        create_technical : bool
-            Create technical indicators
             
         Returns
         -------

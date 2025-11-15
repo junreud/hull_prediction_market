@@ -948,8 +948,9 @@ class FeatureEngineering:
         target_col: str = 'forward_returns'
     ) -> Tuple[pd.DataFrame, List[str]]:
         """
-        Remove highly correlated features.
-        
+        다중공선성(Multicollinearity) 제거를 위한 고급 Correlation Feature Selection
+        - 다중공선성(Multicollinearity) : 내용이 중복되는 Feature가 여러개 존재하는 특성
+
         Parameters
         ----------
         df : pd.DataFrame
@@ -958,7 +959,7 @@ class FeatureEngineering:
             Correlation threshold (default: 0.95)
         target_col : str
             Target column name
-            
+        
         Returns
         -------
         Tuple[pd.DataFrame, List[str]]
@@ -976,16 +977,22 @@ class FeatureEngineering:
                           'market_forward_excess_returns']
         ]
         
-        # Calculate correlation matrix
+        # Feature 간 Correlation Matrix 계산
         corr_matrix = df[feature_cols].corr().abs()
         
         # Find highly correlated pairs
-        upper_tri = corr_matrix.where(
-            np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
+        # -> 상관행렬은 대각선을 기준으로 위쪽/아래쪽 동일한 데이터이므로 하나만 보면 되기때문에 masking 작업이라고 생각하면됨.
+        upper_tri = corr_matrix.where( # False인 위치(반절)는 값이 NaN 들어가게됨.
+            np.triu(np.ones(corr_matrix.shape), k=1).astype(bool) 
         )
         
+        # 타깃과 feature간 상관 미리 계산 (고비용 반복 방지)
+        target_corr = None
+        if target_col is not None:
+            target_corr = df[feature_cols + [target_col]].corr()[target_col].abs()
+
         # Features to remove
-        to_remove = []
+        to_remove = set()
         
         for column in upper_tri.columns:
             if any(upper_tri[column] > threshold):
@@ -1002,17 +1009,17 @@ class FeatureEngineering:
                         # Remove the one with lower target correlation
                         if target_corr < corr_target_corr:
                             if column not in to_remove:
-                                to_remove.append(column)
+                                to_remove.add(column)
                         else:
                             if corr_feat not in to_remove:
-                                to_remove.append(corr_feat)
+                                to_remove.add(corr_feat)
                 else:
                     # No target, just remove one of the pair
                     if column not in to_remove:
-                        to_remove.append(column)
+                        to_remove.add(column)
         
         # Remove duplicates
-        to_remove = list(set(to_remove))
+        to_remove = list(to_remove)
         
         logger.info(f"\n✓ Found {len(to_remove)} highly correlated features to remove")
         
@@ -1022,12 +1029,11 @@ class FeatureEngineering:
                 logger.info(f"  {feat}")
         
         # Remove features
-        keep_cols = [col for col in df.columns if col not in to_remove]
-        df_filtered = df[keep_cols].copy()
+        df_filtered = df.drop(columns=to_remove, errors='ignore')
         
         logger.info(f"\n✓ Correlation filtering complete")
         logger.info(f"  Removed features: {len(to_remove)}")
-        logger.info(f"  Remaining features: {len(keep_cols) - 2}")  # Exclude date and target
+        logger.info(f"  Remaining features: {len(df.columns) - 2}")  # Exclude date and target
         
         return df_filtered, to_remove
     

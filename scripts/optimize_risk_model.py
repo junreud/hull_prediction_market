@@ -18,10 +18,37 @@ Usage:
 import sys
 from pathlib import Path
 
-# Add project root to Python path
+# ========== DEBUG: Print current state ==========
+print("="*80)
+print("RISK MODEL - SCRIPT PATH SETUP - DEBUG INFO")
+print("="*80)
+print(f"__file__ = {__file__}")
+
+# Add project root to Python path (Kaggle and Local compatible)
 project_root = Path(__file__).parent.parent
+print(f"project_root = {project_root}")
+print(f"project_root exists? {project_root.exists()}")
+
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
+    print(f"✓ Added project_root to sys.path")
+
+# Kaggle-specific: Add dataset path if exists
+kaggle_dataset_paths = [
+    Path('/kaggle/input/mydata'),
+    Path('/kaggle/input/my-hull-models'),
+]
+for kaggle_path in kaggle_dataset_paths:
+    print(f"\nChecking {kaggle_path}...")
+    if kaggle_path.exists():
+        print(f"  ✓ Exists! Adding to sys.path")
+        if str(kaggle_path) not in sys.path:
+            sys.path.insert(0, str(kaggle_path))
+        break
+
+print(f"\nsys.path[0] = {sys.path[0]}")
+print("="*80)
+print()
 
 import numpy as np
 import pandas as pd
@@ -480,6 +507,12 @@ class RiskModelOptimizer:
             
             # Save models
             risk_model.save_models(output_dir="artifacts/models_risk_optimized")
+            
+            # Save feature names for inference
+            feature_names_path = Path("artifacts/models_risk_optimized/feature_names.json")
+            with open(feature_names_path, 'w') as f:
+                json.dump(feature_cols, f, indent=2)
+            logger.info(f"✓ Feature names saved: {len(feature_cols)} features")
             
             # Save OOF predictions for position optimization
             oof_pred_path = Path("artifacts/oof_risk_predictions.npy")

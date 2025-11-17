@@ -17,10 +17,57 @@ Usage:
 import sys
 from pathlib import Path
 
-# Add project root to Python path
+# ========== DEBUG: Print current state ==========
+print("="*80)
+print("SCRIPT PATH SETUP - DEBUG INFO")
+print("="*80)
+print(f"__file__ = {__file__}")
+print(f"sys.path BEFORE modification:")
+for p in sys.path[:5]:
+    print(f"  - {p}")
+
+# Add project root to Python path (Kaggle and Local compatible)
 project_root = Path(__file__).parent.parent
+print(f"\nproject_root = {project_root}")
+print(f"project_root exists? {project_root.exists()}")
+
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
+    print(f"✓ Added project_root to sys.path")
+
+# Kaggle-specific: Add dataset path if exists
+kaggle_dataset_paths = [
+    Path('/kaggle/input/mydata'),
+    Path('/kaggle/input/my-hull-models'),
+]
+for kaggle_path in kaggle_dataset_paths:
+    print(f"\nChecking {kaggle_path}...")
+    print(f"  Exists? {kaggle_path.exists()}")
+    if kaggle_path.exists():
+        print(f"  Contents:")
+        for item in kaggle_path.iterdir():
+            print(f"    - {item.name}")
+        if str(kaggle_path) not in sys.path:
+            sys.path.insert(0, str(kaggle_path))
+            print(f"  ✓ Added {kaggle_path} to sys.path")
+        break
+
+print(f"\nsys.path AFTER modification:")
+for p in sys.path[:5]:
+    print(f"  - {p}")
+
+# Check if src module is findable
+src_path = Path(sys.path[0]) / "src"
+print(f"\nLooking for src at: {src_path}")
+print(f"src exists? {src_path.exists()}")
+if src_path.exists():
+    print(f"src contents:")
+    for item in src_path.iterdir():
+        if item.suffix == '.py':
+            print(f"  - {item.name}")
+
+print("="*80)
+print()
 
 import numpy as np
 import pandas as pd
@@ -407,6 +454,12 @@ class ReturnModelOptimizer:
             # Save models
             predictor.save_models(output_dir="artifacts/models_optimized")
             
+            # Save feature names for inference
+            feature_names_path = Path("artifacts/models_optimized/feature_names.json")
+            with open(feature_names_path, 'w') as f:
+                json.dump(feature_cols, f, indent=2)
+            logger.info(f"✓ Feature names saved: {len(feature_cols)} features")
+            
             # Save OOF predictions for position optimization
             oof_pred_path = Path("artifacts/oof_return_predictions.npy")
             oof_pred_path.parent.mkdir(parents=True, exist_ok=True)
@@ -687,21 +740,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-"""
-# 최적화 결과 요약 확인
-cat results/optimization/optimization_summary.json
-
-# 최적 하이퍼파라미터 확인
-cat artifacts/lightgbm_best_params_optimized.json
-
-# 선택된 피처 확인
-cat results/feature_selection/selected_features_optimized.csv
-
-# 피처 중요도 확인
-cat results/interpretability_optimized/feature_importance_gain.csv
-
-# 저장된 모델 확인
-ls -la artifacts/models_optimized/
-"""

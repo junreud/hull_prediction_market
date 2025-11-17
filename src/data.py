@@ -35,7 +35,28 @@ class DataLoader:
             config_path: Path to configuration file
         """
         self.config = load_config(config_path)
-        self.data_dir = Path(self.config.get('paths', {}).get('data', 'data/raw/'))
+        
+        # Auto-detect data directory (Kaggle vs Local)
+        default_data_dir = self.config.get('paths', {}).get('data', 'data/raw/')
+        
+        # Try multiple possible locations
+        possible_paths = [
+            Path(default_data_dir),  # From config
+            Path('data/raw/'),  # Local relative
+            Path('/kaggle/input/hull-tactical-market-prediction/'),  # Kaggle competition data
+        ]
+        
+        self.data_dir = None
+        for path in possible_paths:
+            if path.exists() and (path / 'train.csv').exists():
+                self.data_dir = path
+                logger.info(f"Data directory found: {self.data_dir}")
+                break
+        
+        if self.data_dir is None:
+            # Fallback to default
+            self.data_dir = Path(default_data_dir)
+            logger.warning(f"Data directory not found, using default: {self.data_dir}")
         
         # Feature groups
         self.feature_groups = {

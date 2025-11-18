@@ -363,10 +363,28 @@ class ReturnModelOptimizer:
             
             logger.info(f"\n✓ Hyperparameter tuning complete")
             
+            # Log objective-specific results
+            if objective_type == 'combined' and hasattr(tuner.study.best_trial, 'user_attrs'):
+                ic = tuner.study.best_trial.user_attrs.get('ic', None)
+                spread = tuner.study.best_trial.user_attrs.get('spread', None)
+                if ic is not None and spread is not None:
+                    actual_score = -best_score  # Negate back to get actual score
+                    logger.info(f"\n📊 Optimization Results:")
+                    logger.info(f"  Combined Score: {actual_score:.6f}")
+                    logger.info(f"  → IC: {ic:.6f}")
+                    logger.info(f"  → Spread: {spread:.6f} ({spread*100:.4f}%)")
+                    logger.info(f"  (Note: Best score is negated for Optuna minimization)")
+            elif objective_type == 'ic':
+                logger.info(f"  Best IC: {-best_score:.6f}")
+            elif objective_type == 'spread':
+                logger.info(f"  Best Spread: {-best_score:.6f} ({-best_score*100:.4f}%)")
+            
             # Store results
             self.results['hyperparameter_tuning'] = {
                 'n_trials': n_trials,
                 'best_score': best_score,
+                'actual_score': -best_score if objective_type != 'rmse' else best_score,
+                'objective_type': objective_type,
                 'best_params': best_params
             }
             
@@ -820,7 +838,16 @@ class ReturnModelOptimizer:
         if 'hyperparameter_tuning' in self.results:
             logger.info(f"\nHyperparameter Tuning:")
             logger.info(f"  Trials: {self.results['hyperparameter_tuning']['n_trials']}")
-            logger.info(f"  Best score: {self.results['hyperparameter_tuning']['best_score']:.6f}")
+            obj_type = self.results['hyperparameter_tuning'].get('objective_type', 'unknown')
+            actual_score = self.results['hyperparameter_tuning'].get('actual_score')
+            
+            if obj_type == 'combined' and actual_score is not None:
+                logger.info(f"  Best Combined Score: {actual_score:.6f}")
+                logger.info(f"  (Optuna score: {self.results['hyperparameter_tuning']['best_score']:.6f} - negated for minimization)")
+            elif obj_type in ['ic', 'spread'] and actual_score is not None:
+                logger.info(f"  Best {obj_type.upper()}: {actual_score:.6f}")
+            else:
+                logger.info(f"  Best score: {self.results['hyperparameter_tuning']['best_score']:.6f}")
         
         if 'final_model' in self.results:
             logger.info(f"\nFinal Model:")

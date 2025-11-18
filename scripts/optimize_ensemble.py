@@ -24,7 +24,7 @@ from src.data import DataLoader
 from src.features import FeatureEngineering
 from src.models import ReturnPredictor
 from src.ensemble import ModelEnsemble, combine_risk_predictions
-from src.position import QuantileBinningMapper
+from src.metric import evaluate_return_model
 from src.cv import PurgedWalkForwardCV
 from src.utils import setup_logging, Timer
 
@@ -158,19 +158,36 @@ def train_diverse_models(
 def optimize_ensemble_weights(
     model_results: Dict[str, Dict],
     y_true: np.ndarray,
-    date_ids: np.ndarray,
-    market_returns: np.ndarray
+    objective_type: str = 'combined'
 ) -> Dict:
     """
-    Find optimal ensemble weights that maximize Sharpe ratio.
+    Find optimal ensemble weights that maximize return model metrics.
     
-    Uses Optuna to search for best weights.
+    Uses Optuna to search for best weights based on IC and Spread.
+    
+    Parameters
+    ----------
+    model_results : Dict[str, Dict]
+        Dictionary of model results with OOF predictions
+    y_true : np.ndarray
+        True target values
+    objective_type : str
+        Optimization objective:
+        - 'ic': Maximize Information Coefficient
+        - 'spread': Maximize Long-Short Spread
+        - 'combined': Maximize IC + (Spread × 100) [RECOMMENDED]
+    
+    Returns
+    -------
+    Dict
+        Optimization results with weights and metrics
     """
     import optuna
     
     logger.info("\n" + "=" * 80)
-    logger.info("OPTIMIZING ENSEMBLE WEIGHTS")
+    logger.info("OPTIMIZING ENSEMBLE WEIGHTS FOR RETURN MODEL")
     logger.info("=" * 80)
+    logger.info(f"Objective: {objective_type}")
     
     # Extract OOF predictions
     oof_preds = {
@@ -178,28 +195,8 @@ def optimize_ensemble_weights(
         for name, result in model_results.items()
     }
     
-    # Load position mapper from saved config
-    position_config_path = project_root / "artifacts" / "best_position_strategy.json"
-    
-    # Always create mapper with default config
-    position_mapper = QuantileBinningMapper(config_path="conf/params.yaml")
-    
-    # If we have optimized allocations, we'll use them in map_positions
-    optimal_allocations = None
-    if position_config_path.exists():
-        with open(position_config_path) as f:
-            position_config = json.load(f)
-        
-        strategy_name = position_config['strategy_name']
-        if 'Quantile' in strategy_name and 'allocations' in position_config.get('parameters', {}):
-            optimal_allocations = np.array(position_config['parameters']['allocations'])
-            logger.info(f"Loaded optimized allocations: {optimal_allocations}")
-        logger.info(f"Loaded position strategy: {strategy_name}")
-    else:
-        logger.info("Using default Quantile Binning strategy")
-    
     def objective(trial):
-        """Objective function: maximize Sharpe ratio."""
+        """Objective function: maximize IC + Spread."""
         n_models = len(oof_preds)
         
         # Suggest weights (will be normalized to sum to 1)
@@ -225,35 +222,28 @@ def optimize_ensemble_weights(
         # Get ensemble predictions
         ensemble_pred = ensemble.predict(oof_preds)
         
-        # Assume constant risk for optimization
-        # (In practice, would use risk model predictions)
-        sigma_hat = np.std(y_true) * np.ones_like(ensemble_pred)
+        # Evaluate return model metrics
+        metrics = evaluate_return_model(ensemble_pred, y_true, return_all_metrics=True)
         
-        # Convert to positions
-        if optimal_allocations is not None:
-            allocations = position_mapper.map_positions(
-                r_hat=ensemble_pred,
-                sigma_hat=sigma_hat,
-                allocations=optimal_allocations
-            )
-        else:
-            allocations = position_mapper.calculate_positions(
-                r_hat=ensemble_pred,
-                sigma_hat=sigma_hat
-            )
+        ic = metrics['information_coefficient']
+        spread = metrics['long_short_spread']
         
-        # Calculate Sharpe
-        strategy_returns = allocations * market_returns
-        market_vol = np.std(market_returns)
-        strategy_vol = np.std(strategy_returns)
+        # Store metrics for analysis
+        trial.set_user_attr('ic', ic)
+        trial.set_user_attr('spread', spread)
+        trial.set_user_attr('correlation', metrics['correlation'])
+        trial.set_user_attr('directional_accuracy', metrics['directional_accuracy'])
         
-        vol_ratio = strategy_vol / (market_vol + 1e-8)
-        vol_penalty = 1.0 + max(0.0, vol_ratio - 1.2)
-        
-        mean_return = np.mean(strategy_returns)
-        sharpe = (mean_return / (strategy_vol + 1e-8)) / vol_penalty
-        
-        return sharpe
+        # Calculate objective based on type
+        if objective_type == 'ic':
+            return ic
+        elif objective_type == 'spread':
+            return spread
+        else:  # combined
+            # IC weight: 1.0, Spread weight: 100.0 (scale 0.001 → 0.1)
+            combined_score = ic + (spread * 100)
+            trial.set_user_attr('combined_score', combined_score)
+            return combined_score
     
     # Run optimization
     study = optuna.create_study(
@@ -274,15 +264,42 @@ def optimize_ensemble_weights(
     total = sum(raw_weights)
     best_weights = [w / total for w in raw_weights]
     
-    logger.info(f"\nBest Sharpe: {best_trial.value:.6f}")
-    logger.info("Best weights:")
+    # Get best metrics
+    best_ic = best_trial.user_attrs.get('ic', 0.0)
+    best_spread = best_trial.user_attrs.get('spread', 0.0)
+    best_corr = best_trial.user_attrs.get('correlation', 0.0)
+    best_dir_acc = best_trial.user_attrs.get('directional_accuracy', 0.0)
+    
+    logger.info(f"\n{'='*80}")
+    logger.info("OPTIMIZATION RESULTS")
+    logger.info(f"{'='*80}")
+    
+    if objective_type == 'combined':
+        logger.info(f"\n🎯 Best Combined Score: {best_trial.value:.6f}")
+        logger.info(f"   → IC: {best_ic:.6f}")
+        logger.info(f"   → Spread: {best_spread:.6f} ({best_spread*100:.4f}%)")
+    elif objective_type == 'ic':
+        logger.info(f"\n🎯 Best IC: {best_trial.value:.6f}")
+    else:  # spread
+        logger.info(f"\n🎯 Best Spread: {best_trial.value:.6f} ({best_trial.value*100:.4f}%)")
+    
+    logger.info(f"\n📊 Additional Metrics:")
+    logger.info(f"   Correlation: {best_corr:.4f}")
+    logger.info(f"   Directional Accuracy: {best_dir_acc:.2%}")
+    
+    logger.info(f"\n⚖️  Best Ensemble Weights:")
     for name, weight in zip(oof_preds.keys(), best_weights):
-        logger.info(f"  {name}: {weight:.4f}")
+        logger.info(f"   {name:15s}: {weight:.4f}")
     
     return {
         'weights': best_weights,
         'model_names': list(oof_preds.keys()),
-        'best_sharpe': best_trial.value,
+        'best_score': best_trial.value,
+        'best_ic': best_ic,
+        'best_spread': best_spread,
+        'best_correlation': best_corr,
+        'best_directional_accuracy': best_dir_acc,
+        'objective_type': objective_type,
         'study': study
     }
 
@@ -408,20 +425,17 @@ def main():
             logger.error(f"Failed to test {strategy}: {e}")
             continue
     
-    # Step 6: Optimize for Sharpe ratio
+    # Step 6: Optimize for IC and Spread
     logger.info("\n" + "=" * 80)
-    logger.info("STEP 6: OPTIMIZE FOR SHARPE RATIO")
+    logger.info("STEP 6: OPTIMIZE ENSEMBLE WEIGHTS")
     logger.info("=" * 80)
-    
-    # Get market returns for Sharpe calculation
-    market_returns = y_true_oof  # forward_returns is the market return
+    logger.info("\nOptimizing for Return Model Performance (IC + Spread)")
     
     # Optimize weights
     optimization_result = optimize_ensemble_weights(
         model_results=model_results,
         y_true=y_true_oof,
-        date_ids=date_ids_oof,
-        market_returns=market_returns
+        objective_type='combined'  # 'ic', 'spread', or 'combined'
     )
     
     # Step 7: Save results
@@ -437,7 +451,14 @@ def main():
         'strategy': 'weighted_average',
         'weights': optimization_result['weights'],
         'model_names': optimization_result['model_names'],
-        'best_sharpe': optimization_result['best_sharpe'],
+        'objective_type': optimization_result['objective_type'],
+        'metrics': {
+            'best_score': optimization_result['best_score'],
+            'ic': optimization_result['best_ic'],
+            'spread': optimization_result['best_spread'],
+            'correlation': optimization_result['best_correlation'],
+            'directional_accuracy': optimization_result['best_directional_accuracy']
+        },
         'individual_model_scores': {
             name: result['oof_score']
             for name, result in model_results.items()
@@ -459,14 +480,25 @@ def main():
     logger.info("\n" + "=" * 80)
     logger.info("ENSEMBLE OPTIMIZATION COMPLETE")
     logger.info("=" * 80)
-    logger.info(f"\nBest ensemble Sharpe: {optimization_result['best_sharpe']:.6f}")
-    logger.info("\nModel weights:")
-    for name, weight in zip(optimization_result['model_names'], optimization_result['weights']):
-        logger.info(f"  {name}: {weight:.4f}")
     
-    logger.info(f"\nIndividual model RMSEs:")
+    logger.info(f"\n🎯 Optimization Objective: {optimization_result['objective_type']}")
+    
+    if optimization_result['objective_type'] == 'combined':
+        logger.info(f"\n📊 Best Combined Score: {optimization_result['best_score']:.6f}")
+        logger.info(f"   → IC: {optimization_result['best_ic']:.6f}")
+        logger.info(f"   → Spread: {optimization_result['best_spread']:.6f} ({optimization_result['best_spread']*100:.4f}%)")
+    elif optimization_result['objective_type'] == 'ic':
+        logger.info(f"\n📊 Best IC: {optimization_result['best_score']:.6f}")
+    else:  # spread
+        logger.info(f"\n📊 Best Spread: {optimization_result['best_score']:.6f} ({optimization_result['best_score']*100:.4f}%)")
+    
+    logger.info(f"\n⚖️  Model Weights:")
+    for name, weight in zip(optimization_result['model_names'], optimization_result['weights']):
+        logger.info(f"   {name:15s}: {weight:.4f}")
+    
+    logger.info(f"\n🔍 Individual Model RMSEs:")
     for name, score in ensemble_config['individual_model_scores'].items():
-        logger.info(f"  {name}: {score:.6f}")
+        logger.info(f"   {name:15s}: {score:.6f}")
 
 
 if __name__ == "__main__":

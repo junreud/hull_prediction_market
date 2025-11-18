@@ -483,6 +483,207 @@ class ReturnModelOptimizer:
             
             return predictor, oof_preds, oof_score
     
+    def step5_5_ensemble_models(
+        self,
+        df: pd.DataFrame,
+        feature_cols: List[str],
+        best_params: Dict,
+        enable_ensemble: bool = True,
+        n_ensemble_models: int = 3,
+        ensemble_objective: str = 'combined'
+    ) -> Tuple[Optional[Dict], np.ndarray, float]:
+        """
+        Step 5.5: Train multiple models and create ensemble (OPTIONAL).
+        
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Training dataframe
+        feature_cols : List[str]
+            Feature column names
+        best_params : Dict
+            Best hyperparameters from Step 4
+        enable_ensemble : bool
+            Whether to create ensemble (if False, returns None)
+        n_ensemble_models : int
+            Number of models to ensemble (2-5 recommended)
+        ensemble_objective : str
+            'ic', 'spread', or 'combined'
+            
+        Returns
+        -------
+        Tuple[Optional[Dict], np.ndarray, float]
+            (Ensemble config or None, Ensemble OOF predictions, Ensemble score)
+        """
+        if not enable_ensemble:
+            logger.info("\n⏭️  Ensemble disabled, skipping Step 5.5")
+            return None, None, None
+        
+        logger.info("\n" + "="*80)
+        logger.info("STEP 5.5: ENSEMBLE MODELS")
+        logger.info("="*80)
+        
+        from src.ensemble import ModelEnsemble
+        
+        with Timer("Ensemble Training", logger):
+            model_results = {}
+            
+            # Model 1: Standard (best params from tuning)
+            logger.info("\n[Model 1/3] Standard configuration")
+            predictor1 = ReturnPredictor(model_type='lightgbm', config_path=self.config_path)
+            predictor1.params.update(best_params)
+            result1 = predictor1.train_cv(df=df, target_col='forward_returns', date_col='date_id')
+            model_results['standard'] = result1
+            logger.info(f"  OOF RMSE: {result1['oof_score']:.6f}")
+            
+            # Model 2: Complex (deeper trees)
+            logger.info("\n[Model 2/3] Complex configuration")
+            predictor2 = ReturnPredictor(model_type='lightgbm', config_path=self.config_path)
+            complex_params = best_params.copy()
+            complex_params.update({
+                'max_depth': min(best_params.get('max_depth', 5) + 3, 12),
+                'num_leaves': max(best_params.get('num_leaves', 31) // 2, 20),
+                'learning_rate': best_params.get('learning_rate', 0.05) * 0.6,
+                'n_estimators': int(best_params.get('n_estimators', 200) * 1.5)
+            })
+            predictor2.params.update(complex_params)
+            result2 = predictor2.train_cv(df=df, target_col='forward_returns', date_col='date_id')
+            model_results['complex'] = result2
+            logger.info(f"  OOF RMSE: {result2['oof_score']:.6f}")
+            
+            # Model 3: Regularized
+            logger.info("\n[Model 3/3] Regularized configuration")
+            predictor3 = ReturnPredictor(model_type='lightgbm', config_path=self.config_path)
+            reg_params = best_params.copy()
+            reg_params.update({
+                'lambda_l1': 1.0,
+                'lambda_l2': 1.0,
+                'feature_fraction': 0.7,
+                'bagging_fraction': 0.7,
+                'bagging_freq': 1
+            })
+            predictor3.params.update(reg_params)
+            result3 = predictor3.train_cv(df=df, target_col='forward_returns', date_col='date_id')
+            model_results['regularized'] = result3
+            logger.info(f"  OOF RMSE: {result3['oof_score']:.6f}")
+            
+            # ========== ENSEMBLE OPTIMIZATION ==========
+            logger.info("\n" + "-"*80)
+            logger.info("OPTIMIZING ENSEMBLE WEIGHTS")
+            logger.info("-"*80)
+            
+            import optuna
+            
+            # Extract OOF predictions
+            oof_preds = {name: result['oof_predictions'] for name, result in model_results.items()}
+            y_true = df['forward_returns'].values
+            
+            # Get valid indices
+            valid_mask = ~np.isnan(result1['oof_predictions'])
+            y_true_valid = y_true[valid_mask]
+            oof_preds_valid = {name: preds[valid_mask] for name, preds in oof_preds.items()}
+            
+            def objective(trial):
+                n_models = len(oof_preds_valid)
+                raw_weights = [trial.suggest_float(f'weight_{i}', 0.0, 1.0) for i in range(n_models)]
+                total = sum(raw_weights)
+                if total == 0:
+                    return -999.0
+                weights = [w / total for w in raw_weights]
+                
+                # Create ensemble
+                ensemble = ModelEnsemble(strategy='weighted_average', weights=weights)
+                ensemble.model_names = list(oof_preds_valid.keys())
+                ensemble.is_fitted = True
+                
+                # Get predictions
+                ensemble_pred = ensemble.predict(oof_preds_valid)
+                
+                # Evaluate
+                metrics = evaluate_return_model(ensemble_pred, y_true_valid, return_all_metrics=True)
+                ic = metrics['information_coefficient']
+                spread = metrics['long_short_spread']
+                
+                trial.set_user_attr('ic', ic)
+                trial.set_user_attr('spread', spread)
+                
+                if ensemble_objective == 'ic':
+                    return ic
+                elif ensemble_objective == 'spread':
+                    return spread
+                else:  # combined
+                    return ic + (spread * 100)
+            
+            # Optimize
+            study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(seed=42))
+            study.optimize(objective, n_trials=50, show_progress_bar=True)
+            
+            # Best weights
+            best_trial = study.best_trial
+            best_weights = [best_trial.params[f'weight_{i}'] for i in range(len(oof_preds_valid))]
+            total = sum(best_weights)
+            best_weights = [w / total for w in best_weights]
+            
+            best_ic = best_trial.user_attrs.get('ic', 0.0)
+            best_spread = best_trial.user_attrs.get('spread', 0.0)
+            
+            logger.info(f"\n🎯 Best Ensemble Score: {best_trial.value:.6f}")
+            logger.info(f"   → IC: {best_ic:.6f}")
+            logger.info(f"   → Spread: {best_spread:.6f} ({best_spread*100:.4f}%)")
+            logger.info(f"\n⚖️  Ensemble Weights:")
+            for name, weight in zip(oof_preds_valid.keys(), best_weights):
+                logger.info(f"   {name:15s}: {weight:.4f}")
+            
+            # Create final ensemble
+            final_ensemble = ModelEnsemble(strategy='weighted_average', weights=best_weights)
+            final_ensemble.model_names = list(oof_preds_valid.keys())
+            final_ensemble.is_fitted = True
+            
+            # Get ensemble predictions
+            ensemble_oof = final_ensemble.predict(oof_preds_valid)
+            
+            # Full array with NaN for invalid indices
+            ensemble_oof_full = np.full(len(df), np.nan)
+            ensemble_oof_full[valid_mask] = ensemble_oof
+            
+            # Evaluate ensemble
+            ensemble_metrics = evaluate_return_model(ensemble_oof, y_true_valid)
+            ensemble_rmse = ensemble_metrics['rmse']
+            
+            logger.info(f"\n✓ Ensemble complete")
+            logger.info(f"  Ensemble RMSE: {ensemble_rmse:.6f}")
+            logger.info(f"  IC: {ensemble_metrics['information_coefficient']:.6f}")
+            logger.info(f"  Spread: {ensemble_metrics['long_short_spread']:.6f}")
+            
+            # Store results
+            ensemble_config = {
+                'strategy': 'weighted_average',
+                'weights': best_weights,
+                'model_names': list(oof_preds_valid.keys()),
+                'objective_type': ensemble_objective,
+                'metrics': {
+                    'best_score': best_trial.value,
+                    'ic': best_ic,
+                    'spread': best_spread,
+                    'rmse': ensemble_rmse,
+                    **ensemble_metrics
+                },
+                'individual_scores': {name: result['oof_score'] for name, result in model_results.items()}
+            }
+            
+            self.results['ensemble'] = ensemble_config
+            
+            # Save ensemble config
+            output_dir = Path("artifacts")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            with open(output_dir / 'ensemble_config.json', 'w') as f:
+                json.dump(ensemble_config, f, indent=2)
+            
+            # Save ensemble OOF predictions
+            np.save(output_dir / 'oof_ensemble_predictions.npy', ensemble_oof_full)
+            
+            return ensemble_config, ensemble_oof_full, ensemble_rmse
+
     def step6_model_interpretation(
         self,
         predictor: ReturnPredictor,
@@ -658,6 +859,11 @@ class ReturnModelOptimizer:
         n_trials: int = 50,
         timeout: Optional[int] = None,
         objective_type: str = 'combined',  # ← New parameter
+        # Step 5: Final Model Training
+        # Step 5.5: Ensemble Models (optional)
+        enable_ensemble: bool = False,
+        n_ensemble_models: int = 3,
+        ensemble_objective: str = 'combined',
         # Step 6: Interpretation
         calculate_shap: bool = False
     ) -> Dict:
@@ -716,6 +922,21 @@ class ReturnModelOptimizer:
             best_params
         )
         
+        # Step 5.5: Ensemble Models (optional)
+        if enable_ensemble:
+            ensemble_results = self.step5_5_ensemble_models(
+                train_selected,
+                selected_features,
+                best_params,
+                enable_ensemble=enable_ensemble,
+                n_ensemble_models=n_ensemble_models,
+                ensemble_objective=ensemble_objective
+            )
+            if ensemble_results is not None:
+                oof_preds = ensemble_results['oof_predictions']
+                oof_score = ensemble_results['oof_score']
+            
+        
         # Step 6: Model interpretation
         interpreter = self.step6_model_interpretation(
             predictor,
@@ -758,6 +979,10 @@ def main():
         n_trials=50,  # ⬆️ Increased from 1 to 50 for proper optimization
         timeout=None,  # Or set time limit in seconds (e.g., 3600 for 1 hour)
         objective_type='combined',  # 'rmse', 'ic', 'spread', or 'combined' (RECOMMENDED)
+        # Ensemble Control
+        enable_ensemble=False,
+        n_ensemble_models=3,
+        ensemble_objective='combined',  # 'ic', 'spread', or 'combined'
         # Interpretation
         calculate_shap=False  # Set True for SHAP analysis (slow, use after optimization)
     )

@@ -29,6 +29,7 @@ import json
 
 from src.cv import CVStrategy, create_cv_strategy
 from src.utils import get_logger, load_config, Timer
+from src.metric import evaluate_return_model
 
 logger = get_logger(log_file="logs/tuner.log", level="INFO")
 
@@ -42,6 +43,7 @@ class OptunaLightGBMTuner:
     - Time series cross-validation
     - Early stopping and pruning
     - Parameter space customization
+    - Custom objective functions (RMSE, IC, Spread, or Combined)
     """
     
     def __init__(
@@ -51,7 +53,8 @@ class OptunaLightGBMTuner:
         n_trials: int = 100,
         timeout: Optional[int] = None,
         n_jobs: int = 1,
-        random_state: int = 42
+        random_state: int = 42,
+        objective_type: str = 'combined'  # 'rmse', 'ic', 'spread', 'combined'
     ):
         """
         Initialize Optuna tuner.
@@ -70,6 +73,12 @@ class OptunaLightGBMTuner:
             Number of parallel jobs
         random_state : int
             Random seed
+        objective_type : str
+            Type of objective to optimize:
+            - 'rmse': Minimize RMSE (default, fast but not ideal for competition)
+            - 'ic': Maximize Information Coefficient (順위 예측)
+            - 'spread': Maximize Long-Short Spread (수익성)
+            - 'combined': Maximize weighted combination of IC and Spread (RECOMMENDED)
         """
         self.config = load_config(config_path)
         self.config_section = config_section
@@ -77,6 +86,7 @@ class OptunaLightGBMTuner:
         self.timeout = timeout
         self.n_jobs = n_jobs
         self.random_state = random_state
+        self.objective_type = objective_type
         
         # CV strategy
         self.cv_strategy = create_cv_strategy(config_path)
@@ -96,6 +106,7 @@ class OptunaLightGBMTuner:
         self.best_score = None
         
         logger.info(f"OptunaLightGBMTuner initialized (config_section={config_section})")
+        logger.info(f"Objective type: {objective_type}")
         logger.info(f"Trials: {n_trials}, Timeout: {timeout}, Jobs: {n_jobs}")
     
     def _get_param_space(self, trial: optuna.Trial) -> Dict[str, Any]:
@@ -190,13 +201,17 @@ class OptunaLightGBMTuner:
         Returns
         -------
         float
-            Validation score (lower is better)
+            Validation score (lower is better for 'rmse', higher is better for others)
         """
         # Get parameters
         params = self._get_param_space(trial)
         
         # CV scores
         fold_scores = []
+        
+        # For IC/Spread calculation, collect all predictions
+        all_y_val = []
+        all_y_pred = []
         
         # Get CV folds
         cv_splits = list(self.cv_strategy.get_folds(df))
@@ -235,19 +250,68 @@ class OptunaLightGBMTuner:
             
             # Validate
             y_pred = model.predict(X_val)
-            score = np.sqrt(np.mean((y_val - y_pred) ** 2))
-            fold_scores.append(score)
             
-            # Report intermediate value for pruning
-            trial.report(score, fold_idx)
+            # Calculate score based on objective type
+            if self.objective_type == 'rmse':
+                # RMSE (lower is better)
+                score = np.sqrt(np.mean((y_val - y_pred) ** 2))
+                fold_scores.append(score)
+            else:
+                # For IC/Spread, collect predictions
+                all_y_val.extend(y_val.values)
+                all_y_pred.extend(y_pred)
+            
+            # Report intermediate value for pruning (use RMSE for pruning)
+            rmse = np.sqrt(np.mean((y_val - y_pred) ** 2))
+            trial.report(rmse, fold_idx)
             
             # Check if trial should be pruned
             if trial.should_prune():
                 raise optuna.TrialPruned()
         
-        # Return mean CV score
-        mean_score = np.mean(fold_scores)
-        return mean_score
+        # Calculate final score based on objective type
+        if self.objective_type == 'rmse':
+            # Return mean RMSE (minimize)
+            return np.mean(fold_scores)
+        
+        else:
+            # Convert to numpy arrays
+            all_y_val = np.array(all_y_val)
+            all_y_pred = np.array(all_y_pred)
+            
+            # Calculate return model metrics
+            metrics = evaluate_return_model(all_y_pred, all_y_val, return_all_metrics=True)
+            
+            if self.objective_type == 'ic':
+                # Maximize IC (negate for minimization)
+                ic = metrics['information_coefficient']
+                return -ic  # Optuna minimizes, so negate
+                
+            elif self.objective_type == 'spread':
+                # Maximize Spread (negate for minimization)
+                spread = metrics['long_short_spread']
+                return -spread  # Optuna minimizes, so negate
+                
+            elif self.objective_type == 'combined':
+                # Combined score: IC + weighted Spread
+                # IC weight: 1.0, Spread weight: 100.0 (to scale 0.001 → 0.1)
+                ic = metrics['information_coefficient']
+                spread = metrics['long_short_spread']
+                
+                # Combined score (higher is better)
+                # IC range: 0~0.15, Spread range: 0~0.003 (0.3%)
+                # Scale spread by 100 to match IC scale
+                combined_score = ic + (spread * 100)
+                
+                # Log for debugging
+                trial.set_user_attr('ic', ic)
+                trial.set_user_attr('spread', spread)
+                trial.set_user_attr('combined_score', combined_score)
+                
+                return -combined_score  # Negate for minimization
+            
+            else:
+                raise ValueError(f"Unknown objective_type: {self.objective_type}")
     
     def optimize(
         self,
@@ -321,7 +385,23 @@ class OptunaLightGBMTuner:
             logger.info("\n" + "="*80)
             logger.info("Optimization Results")
             logger.info("="*80)
-            logger.info(f"\nBest Score (RMSE): {self.best_score:.6f}")
+            
+            if self.objective_type == 'rmse':
+                logger.info(f"\nBest Score (RMSE): {self.best_score:.6f}")
+            elif self.objective_type == 'ic':
+                logger.info(f"\nBest Score (IC): {-self.best_score:.6f}")  # Negate back
+            elif self.objective_type == 'spread':
+                logger.info(f"\nBest Score (Spread): {-self.best_score:.6f}")  # Negate back
+            elif self.objective_type == 'combined':
+                logger.info(f"\nBest Score (Combined): {-self.best_score:.6f}")  # Negate back
+                # Show IC and Spread separately if available
+                if hasattr(self.study.best_trial, 'user_attrs'):
+                    ic = self.study.best_trial.user_attrs.get('ic', None)
+                    spread = self.study.best_trial.user_attrs.get('spread', None)
+                    if ic is not None and spread is not None:
+                        logger.info(f"  → IC: {ic:.6f}")
+                        logger.info(f"  → Spread: {spread:.6f} ({spread*100:.4f}%)")
+            
             logger.info(f"Best Trial: {self.study.best_trial.number}")
             logger.info(f"\nBest Parameters:")
             for param, value in self.best_params.items():

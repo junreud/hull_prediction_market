@@ -202,22 +202,6 @@ class ReturnModelOptimizer:
         with Timer("Feature Engineering", logger):
             df_engineered = df.copy()
             
-            # Add time period features
-            if add_time_features:
-                logger.info("\n2.1 Adding time period features...")
-                df_engineered = self.feature_engineer.create_time_period_features(df_engineered)
-                logger.info(f"✓ Time period features added")
-            
-            # Add market regime features
-            if add_regime_features:
-                logger.info("\n2.2 Adding market regime features...")
-                df_engineered = self.feature_engineer.create_market_regime_features(
-                    df_engineered,
-                    auto_detect=True,
-                    vol_threshold=2.0
-                )
-                logger.info(f"✓ Market regime features added")
-            
             # Standard feature engineering
             logger.info("\n2.3 Creating engineered features...")
             df_engineered = self.feature_engineer.fit_transform(df_engineered)
@@ -232,8 +216,6 @@ class ReturnModelOptimizer:
                 'original_features': len(self.feature_engineer.original_features),
                 'engineered_features': len(self.feature_engineer.engineered_features),
                 'total_features': df_engineered.shape[1] - 2,
-                'time_features_added': add_time_features,
-                'regime_features_added': add_regime_features
             }
             
             return df_engineered
@@ -323,7 +305,8 @@ class ReturnModelOptimizer:
         df: pd.DataFrame,
         feature_cols: List[str],
         n_trials: int = 50,
-        timeout: Optional[int] = None
+        timeout: Optional[int] = None,
+        objective_type: str = 'combined'
     ) -> Dict:
         """
         Step 4: Hyperparameter tuning with Optuna.
@@ -338,6 +321,12 @@ class ReturnModelOptimizer:
             Number of Optuna trials
         timeout : int, optional
             Time limit in seconds
+        objective_type : str
+            Optimization objective:
+            - 'rmse': Minimize RMSE (fast, not ideal)
+            - 'ic': Maximize Information Coefficient
+            - 'spread': Maximize Long-Short Spread
+            - 'combined': Maximize IC + Spread (RECOMMENDED)
             
         Returns
         -------
@@ -356,7 +345,8 @@ class ReturnModelOptimizer:
                 n_trials=n_trials,
                 timeout=timeout,
                 n_jobs=1,
-                random_state=42
+                random_state=42,
+                objective_type=objective_type  # ← New parameter
             )
             
             # Run optimization
@@ -667,6 +657,7 @@ class ReturnModelOptimizer:
         # Step 4: Hyperparameter Tuning
         n_trials: int = 50,
         timeout: Optional[int] = None,
+        objective_type: str = 'combined',  # ← New parameter
         # Step 6: Interpretation
         calculate_shap: bool = False
     ) -> Dict:
@@ -714,7 +705,8 @@ class ReturnModelOptimizer:
             train_selected,
             selected_features,
             n_trials=n_trials,
-            timeout=timeout
+            timeout=timeout,
+            objective_type=objective_type  # ← Pass new parameter
         )
         
         # Step 5: Train final model
@@ -763,10 +755,11 @@ def main():
         remove_correlated=True,
         corr_threshold=0.95,
         # Hyperparameter Tuning
-        n_trials=1,  # Increase for better results
-        timeout=None,  # Or set time limit in seconds
+        n_trials=50,  # ⬆️ Increased from 1 to 50 for proper optimization
+        timeout=None,  # Or set time limit in seconds (e.g., 3600 for 1 hour)
+        objective_type='combined',  # 'rmse', 'ic', 'spread', or 'combined' (RECOMMENDED)
         # Interpretation
-        calculate_shap=True  # Set True for SHAP analysis (slow)
+        calculate_shap=False  # Set True for SHAP analysis (slow, use after optimization)
     )
     
     logger.info("\n✓ Optimization complete! Check results/ and artifacts/ directories.")

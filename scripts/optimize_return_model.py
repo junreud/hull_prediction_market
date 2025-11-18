@@ -372,10 +372,6 @@ class ReturnModelOptimizer:
             best_score = tuner.best_score
             
             logger.info(f"\n✓ Hyperparameter tuning complete")
-            logger.info(f"  Best score: {best_score:.6f}")
-            logger.info(f"  Best params:")
-            for key, value in best_params.items():
-                logger.info(f"    {key}: {value}")
             
             # Store results
             self.results['hyperparameter_tuning'] = {

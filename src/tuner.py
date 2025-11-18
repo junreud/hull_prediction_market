@@ -155,10 +155,6 @@ class OptunaLightGBMTuner:
         
         # Add default parameters
         default_params = {
-            'boosting_type': 'gbdt',
-            'objective': 'regression',
-            'metric': 'rmse',
-            'verbosity': -1,
             'random_state': self.random_state,
             'n_estimators': 1000,
             'early_stopping_rounds': 50

@@ -44,7 +44,7 @@ class PurgedWalkForwardCV(BaseCrossValidator):
         n_splits: int = 5,
         embargo: int = 5,
         purge: bool = True,
-        purge_period: int = 15,
+        purge_period: int = 5,
         train_ratio: float = 0.8
     ):
         self.n_splits = n_splits
@@ -207,7 +207,7 @@ class CVStrategy:
         self.n_splits = self.cv_config.get('n_splits', 5)
         self.embargo = self.cv_config.get('embargo', 5)
         self.purge = self.cv_config.get('purge', True)
-        self.purge_period = self.cv_config.get('purge_period', 15)
+        self.purge_period = self.cv_config.get('purge_period', 5)
         self.train_ratio = self.cv_config.get('train_ratio', 0.8)
         
         # Initialize CV splitter

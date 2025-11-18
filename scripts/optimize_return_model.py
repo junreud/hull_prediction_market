@@ -80,7 +80,7 @@ from src.features import FeatureEngineering
 from src.tuner import OptunaLightGBMTuner
 from src.models import ReturnPredictor
 from src.interpretability import ModelInterpreter
-from src.metric import CompetitionMetric
+from src.metric import CompetitionMetric, evaluate_return_model
 from src.utils import get_logger, Timer, load_config
 
 logger = get_logger(log_file="logs/optimization.log", level="INFO")
@@ -441,14 +441,43 @@ class ReturnModelOptimizer:
             oof_preds = results['oof_predictions']
             oof_score = results['oof_score']
             
+            # ========== RETURN MODEL EVALUATION ==========
+            # Evaluate return model performance (독립적으로 평가)
+            logger.info("\n" + "-"*80)
+            logger.info("RETURN MODEL EVALUATION (Independent Assessment)")
+            logger.info("-"*80)
+            
+            # Get actual returns for OOF indices
+            actual_returns = df[results['oof_indices']]['forward_returns'].values
+            oof_preds_valid = oof_preds[results['oof_indices']]
+            
+            # Evaluate return model
+            return_metrics = evaluate_return_model(oof_preds_valid, actual_returns)
+            
+            logger.info("\n📊 Return Model Performance Metrics:")
+            logger.info(f"  🎯 Directional Accuracy: {return_metrics['directional_accuracy']:.2%}")
+            logger.info(f"     (> 0.52 is profitable)")
+            logger.info(f"  📈 Correlation: {return_metrics['correlation']:.4f}")
+            logger.info(f"  📊 Rank Correlation: {return_metrics['rank_correlation']:.4f}")
+            logger.info(f"  ⭐ Information Coefficient: {return_metrics['information_coefficient']:.4f}")
+            logger.info(f"     (> 0.05 is significant, > 0.10 is excellent)")
+            logger.info(f"  📉 RMSE: {return_metrics['rmse']:.6f}")
+            logger.info(f"  📉 MAE: {return_metrics['mae']:.6f}")
+            logger.info(f"\n💰 Quintile Analysis:")
+            logger.info(f"  Top 20% Predictions → Avg Return: {return_metrics['top_quintile_return']:.4%}")
+            logger.info(f"  Bottom 20% Predictions → Avg Return: {return_metrics['bottom_quintile_return']:.4%}")
+            logger.info(f"  Long-Short Spread: {return_metrics['long_short_spread']:.4%}")
+            logger.info(f"     (Higher is better - shows prediction power)")
+            
             logger.info(f"\n✓ Final model training complete")
-            logger.info(f"  OOF Score: {oof_score:.6f}")
+            logger.info(f"  OOF Score (RMSE): {oof_score:.6f}")
             logger.info(f"  Number of models: {len(predictor.models)}")
             
-            # Store results
+            # Store results (including return model metrics)
             self.results['final_model'] = {
                 'oof_score': oof_score,
-                'n_folds': len(predictor.models)
+                'n_folds': len(predictor.models),
+                'return_model_metrics': return_metrics
             }
             
             # Save models
@@ -608,8 +637,17 @@ class ReturnModelOptimizer:
         
         if 'final_model' in self.results:
             logger.info(f"\nFinal Model:")
-            logger.info(f"  OOF Score: {self.results['final_model']['oof_score']:.6f}")
+            logger.info(f"  OOF Score (RMSE): {self.results['final_model']['oof_score']:.6f}")
             logger.info(f"  Folds: {self.results['final_model']['n_folds']}")
+            
+            # Return Model Metrics
+            if 'return_model_metrics' in self.results['final_model']:
+                metrics = self.results['final_model']['return_model_metrics']
+                logger.info(f"\n  📊 Return Model Performance:")
+                logger.info(f"    Directional Accuracy: {metrics['directional_accuracy']:.2%}")
+                logger.info(f"    Information Coefficient: {metrics['information_coefficient']:.4f}")
+                logger.info(f"    Correlation: {metrics['correlation']:.4f}")
+                logger.info(f"    Long-Short Spread: {metrics['long_short_spread']:.4%}")
         
         if 'interpretation' in self.results:
             logger.info(f"\nTop 10 Most Important Features:")

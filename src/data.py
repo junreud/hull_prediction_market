@@ -354,20 +354,21 @@ class DataLoader:
         by_group: bool = True
     ) -> Dict[str, List[List[str]]]:
         """
-        Detect highly correlated feature clusters to identify redundancy.
-        
-        This helps identify groups of features that provide similar information,
-        which can lead to overfitting in tree-based models or instability in linear models.
-        
+        고도로 상관관계가 있는 특성 클러스터를 감지하여 중복성을 식별합니다.
+
+        이 기능은 유사한 정보를 제공하는 특성 그룹을 식별하는 데 도움이 되며,
+        이는 트리 기반 모델에서 과적합을 유발하거나 선형 모델에서 불안정성을 
+        초래할 수 있습니다.
+
         Args:
-            df: DataFrame to analyze
-            method: 'correlation' (Pearson correlation) or 'distance' (not implemented)
-            threshold: Correlation threshold for clustering (default: 0.85)
-            by_group: Whether to cluster within feature groups (default: True)
+            df: 분석할 데이터프레임
+            method: 'correlation' (피어슨 상관관계) 또는 'distance' (미구현)
+            threshold: 클러스터링을 위한 상관관계 임계값 (기본값: 0.85)
+            by_group: 특성 그룹 내에서 클러스터링할지 여부 (기본값: True)
             
         Returns:
-            Dictionary mapping group name -> list of clusters
-            Each cluster is a list of feature names
+            그룹 이름 -> 클러스터 리스트를 매핑하는 딕셔너리
+            각 클러스터는 특성 이름들의 리스트입니다
             
         Example:
             >>> clusters = loader.detect_feature_clusters(train_df, threshold=0.90)

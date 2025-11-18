@@ -52,7 +52,7 @@ cv:
   purge: true
   # Purge period (days) - number of days to remove from train end
   # Options: 10, 15, 20
-  purge_period: 15
+  purge_period: 5
   # Train/validation ratio per fold
   train_ratio: 0.8
 

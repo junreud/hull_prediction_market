@@ -270,6 +270,15 @@ def optimize_ensemble_weights(
     best_corr = best_trial.user_attrs.get('correlation', 0.0)
     best_dir_acc = best_trial.user_attrs.get('directional_accuracy', 0.0)
     
+    # Create ensemble with best weights and get predictions
+    best_ensemble = ModelEnsemble(strategy='weighted_average', weights=best_weights)
+    best_ensemble.model_names = list(oof_preds.keys())
+    best_ensemble.is_fitted = True
+    ensemble_pred = best_ensemble.predict(oof_preds)
+    
+    # Get full metrics for ensemble
+    ensemble_metrics = evaluate_return_model(ensemble_pred, y_true, return_all_metrics=True)
+    
     logger.info(f"\n{'='*80}")
     logger.info("OPTIMIZATION RESULTS")
     logger.info(f"{'='*80}")
@@ -295,11 +304,13 @@ def optimize_ensemble_weights(
         'weights': best_weights,
         'model_names': list(oof_preds.keys()),
         'best_score': best_trial.value,
-        'best_ic': best_ic,
-        'best_spread': best_spread,
-        'best_correlation': best_corr,
-        'best_directional_accuracy': best_dir_acc,
+        'metrics': ensemble_metrics,  # All metrics from evaluate_return_model
+        'ic': best_ic,
+        'spread': best_spread,
+        'correlation': best_corr,
+        'directional_accuracy': best_dir_acc,
         'objective_type': objective_type,
+        'ensemble_predictions': ensemble_pred,  # OOF predictions
         'study': study
     }
 

@@ -83,6 +83,9 @@ from src.interpretability import ModelInterpreter
 from src.metric import CompetitionMetric, evaluate_return_model
 from src.utils import get_logger, Timer, load_config
 
+# Import ensemble optimization functions
+from scripts.optimize_ensemble import optimize_ensemble_weights
+
 logger = get_logger(log_file="logs/optimization.log", level="INFO")
 
 
@@ -586,87 +589,43 @@ class ReturnModelOptimizer:
             logger.info(f"  OOF RMSE: {result3['oof_score']:.6f}")
             
             # ========== ENSEMBLE OPTIMIZATION ==========
+            # Use optimize_ensemble.py's function to avoid code duplication
             logger.info("\n" + "-"*80)
             logger.info("OPTIMIZING ENSEMBLE WEIGHTS")
             logger.info("-"*80)
             
-            import optuna
-            
-            # Extract OOF predictions
-            oof_preds = {name: result['oof_predictions'] for name, result in model_results.items()}
-            y_true = df['forward_returns'].values
-            
             # Get valid indices
             valid_mask = ~np.isnan(result1['oof_predictions'])
+            y_true = df['forward_returns'].values
             y_true_valid = y_true[valid_mask]
-            oof_preds_valid = {name: preds[valid_mask] for name, preds in oof_preds.items()}
             
-            def objective(trial):
-                n_models = len(oof_preds_valid)
-                raw_weights = [trial.suggest_float(f'weight_{i}', 0.0, 1.0) for i in range(n_models)]
-                total = sum(raw_weights)
-                if total == 0:
-                    return -999.0
-                weights = [w / total for w in raw_weights]
-                
-                # Create ensemble
-                ensemble = ModelEnsemble(strategy='weighted_average', weights=weights)
-                ensemble.model_names = list(oof_preds_valid.keys())
-                ensemble.is_fitted = True
-                
-                # Get predictions
-                ensemble_pred = ensemble.predict(oof_preds_valid)
-                
-                # Evaluate
-                metrics = evaluate_return_model(ensemble_pred, y_true_valid, return_all_metrics=True)
-                ic = metrics['information_coefficient']
-                spread = metrics['long_short_spread']
-                
-                trial.set_user_attr('ic', ic)
-                trial.set_user_attr('spread', spread)
-                
-                if ensemble_objective == 'ic':
-                    return ic
-                elif ensemble_objective == 'spread':
-                    return spread
-                else:  # combined
-                    return ic + (spread * 100)
+            # Filter model results to valid indices only
+            model_results_valid = {}
+            for name, result in model_results.items():
+                model_results_valid[name] = {
+                    'oof_predictions': result['oof_predictions'][valid_mask],
+                    'oof_score': result['oof_score']
+                }
             
-            # Optimize
-            study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(seed=42))
-            study.optimize(objective, n_trials=50, show_progress_bar=True)
+            # Call optimize_ensemble_weights from optimize_ensemble.py
+            optimization_results = optimize_ensemble_weights(
+                model_results=model_results_valid,
+                y_true=y_true_valid,
+                objective_type=ensemble_objective
+            )
             
-            # Best weights
-            best_trial = study.best_trial
-            best_weights = [best_trial.params[f'weight_{i}'] for i in range(len(oof_preds_valid))]
-            total = sum(best_weights)
-            best_weights = [w / total for w in best_weights]
-            
-            best_ic = best_trial.user_attrs.get('ic', 0.0)
-            best_spread = best_trial.user_attrs.get('spread', 0.0)
-            
-            logger.info(f"\n🎯 Best Ensemble Score: {best_trial.value:.6f}")
-            logger.info(f"   → IC: {best_ic:.6f}")
-            logger.info(f"   → Spread: {best_spread:.6f} ({best_spread*100:.4f}%)")
-            logger.info(f"\n⚖️  Ensemble Weights:")
-            for name, weight in zip(oof_preds_valid.keys(), best_weights):
-                logger.info(f"   {name:15s}: {weight:.4f}")
-            
-            # Create final ensemble
-            final_ensemble = ModelEnsemble(strategy='weighted_average', weights=best_weights)
-            final_ensemble.model_names = list(oof_preds_valid.keys())
-            final_ensemble.is_fitted = True
-            
-            # Get ensemble predictions
-            ensemble_oof = final_ensemble.predict(oof_preds_valid)
+            # Extract results
+            best_weights = optimization_results['weights']
+            best_ic = optimization_results['ic']
+            best_spread = optimization_results['spread']
+            best_score = optimization_results['best_score']
+            ensemble_oof = optimization_results['ensemble_predictions']
+            ensemble_metrics = optimization_results['metrics']
+            ensemble_rmse = ensemble_metrics['rmse']
             
             # Full array with NaN for invalid indices
             ensemble_oof_full = np.full(len(df), np.nan)
             ensemble_oof_full[valid_mask] = ensemble_oof
-            
-            # Evaluate ensemble
-            ensemble_metrics = evaluate_return_model(ensemble_oof, y_true_valid)
-            ensemble_rmse = ensemble_metrics['rmse']
             
             logger.info(f"\n✓ Ensemble complete")
             logger.info(f"  Ensemble RMSE: {ensemble_rmse:.6f}")
@@ -677,10 +636,10 @@ class ReturnModelOptimizer:
             ensemble_config = {
                 'strategy': 'weighted_average',
                 'weights': best_weights,
-                'model_names': list(oof_preds_valid.keys()),
+                'model_names': list(model_results.keys()),
                 'objective_type': ensemble_objective,
                 'metrics': {
-                    'best_score': best_trial.value,
+                    'best_score': best_score,
                     'ic': best_ic,
                     'spread': best_spread,
                     'rmse': ensemble_rmse,

@@ -530,7 +530,7 @@ class FeatureEngineering:
         df : pd.DataFrame
             Input dataframe with features
         target_col : str
-            Target column name
+            Target column name (forward_returns or risk_label)
         method : str
             Selection method: 'correlation', 'variance', 'mutual_info'
         top_n : int, optional

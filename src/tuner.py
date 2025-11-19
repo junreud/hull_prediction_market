@@ -33,6 +33,12 @@ from src.metric import evaluate_return_model
 
 logger = get_logger(log_file="logs/tuner.log", level="INFO")
 
+# Avoid circular import by lazy importing ReturnPredictor
+def _get_return_predictor():
+    """Lazy import to avoid circular dependency."""
+    from src.models import ReturnPredictor
+    return ReturnPredictor
+
 
 class OptunaLightGBMTuner:
     """
@@ -54,7 +60,8 @@ class OptunaLightGBMTuner:
         timeout: Optional[int] = None,
         n_jobs: int = 1,
         random_state: int = 42,
-        objective_type: str = 'combined'  # 'rmse', 'ic', 'spread', 'combined'
+        objective_type: str = 'combined',  # 'rmse', 'ic', 'spread', 'combined'
+        model_type: str = 'lightgbm'  # 'lightgbm' or 'catboost'
     ):
         """
         Initialize Optuna tuner.
@@ -87,6 +94,7 @@ class OptunaLightGBMTuner:
         self.n_jobs = n_jobs
         self.random_state = random_state
         self.objective_type = objective_type
+        self.model_type = model_type
         
         # CV strategy
         self.cv_strategy = create_cv_strategy(config_path)
@@ -106,8 +114,12 @@ class OptunaLightGBMTuner:
         self.best_score = None
         
         logger.info(f"OptunaLightGBMTuner initialized (config_section={config_section})")
+        logger.info(f"Model type: {model_type}")
         logger.info(f"Objective type: {objective_type}")
         logger.info(f"Trials: {n_trials}, Timeout: {timeout}, Jobs: {n_jobs}")
+        
+        # Store config path for ReturnPredictor
+        self.config['_config_path'] = config_path
     
     def _get_param_space(self, trial: optuna.Trial) -> Dict[str, Any]:
         """
@@ -185,7 +197,10 @@ class OptunaLightGBMTuner:
         target_col: str
     ) -> float:
         """
-        Objective function for Optuna.
+        Objective function for Optuna using ReturnPredictor.
+        
+        This ensures the tuning process uses the EXACT same model
+        as the final training step.
         
         Parameters
         ----------
@@ -203,25 +218,36 @@ class OptunaLightGBMTuner:
         float
             Validation score (lower is better for 'rmse', higher is better for others)
         """
-        # Get parameters
+        # Get parameters from trial
         params = self._get_param_space(trial)
         
-        # CV scores
-        fold_scores = []
+        # Create ReturnPredictor with trial parameters
+        ReturnPredictor = _get_return_predictor()
+        predictor = ReturnPredictor(
+            model_type=self.model_type,
+            config_path=self.config.get('_config_path', 'conf/params.yaml')
+        )
+        
+        # Update predictor params with trial params
+        predictor.params.update(params)
+        
+        # Prepare dataframe with only needed columns
+        df_subset = df[feature_cols + [target_col, 'date_id']].copy()
         
         # For IC/Spread calculation, collect all predictions
         all_y_val = []
         all_y_pred = []
+        fold_scores = []
         
         # Get CV folds
-        cv_splits = list(self.cv_strategy.get_folds(df))
+        cv_splits = list(self.cv_strategy.get_folds(df_subset))
         
-        # Train each fold
+        # Train each fold using ReturnPredictor.train_fold
         for fold_idx, (train_idx, val_idx) in enumerate(cv_splits):
-            X_train = df.iloc[train_idx][feature_cols]
-            y_train = df.iloc[train_idx][target_col]
-            X_val = df.iloc[val_idx][feature_cols]
-            y_val = df.iloc[val_idx][target_col]
+            X_train = df_subset.iloc[train_idx][feature_cols]
+            y_train = df_subset.iloc[train_idx][target_col]
+            X_val = df_subset.iloc[val_idx][feature_cols]
+            y_val = df_subset.iloc[val_idx][target_col]
             
             # Drop NaN values
             train_mask = ~(y_train.isna())
@@ -235,34 +261,22 @@ class OptunaLightGBMTuner:
             if len(X_train) == 0 or len(X_val) == 0:
                 continue
             
-            # Train model
-            model = lgb.LGBMRegressor(**params)
-            
-            model.fit(
-                X_train,
-                y_train,
-                eval_set=[(X_val, y_val)],
-                callbacks=[
-                    lgb.early_stopping(stopping_rounds=params.get('early_stopping_rounds', 50)),
-                    lgb.log_evaluation(period=0)
-                ]
+            # Train fold using ReturnPredictor (same as final training)
+            model, val_score, y_pred = predictor.train_fold(
+                X_train, y_train, X_val, y_val, fold_idx
             )
-            
-            # Validate
-            y_pred = model.predict(X_val)
             
             # Calculate score based on objective type
             if self.objective_type == 'rmse':
                 # RMSE (lower is better)
-                score = np.sqrt(np.mean((y_val - y_pred) ** 2))
-                fold_scores.append(score)
+                fold_scores.append(val_score)
             else:
                 # For IC/Spread, collect predictions
                 all_y_val.extend(y_val.values)
                 all_y_pred.extend(y_pred)
             
             # Report intermediate value for pruning (use RMSE for pruning)
-            rmse = np.sqrt(np.mean((y_val - y_pred) ** 2))
+            rmse = np.sqrt(np.mean((y_val.values - y_pred) ** 2))
             trial.report(rmse, fold_idx)
             
             # Check if trial should be pruned

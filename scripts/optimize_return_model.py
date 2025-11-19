@@ -16,20 +16,10 @@ Usage:
 
 import sys
 from pathlib import Path
-
-# ========== DEBUG: Print current state ==========
-print("="*80)
-print("SCRIPT PATH SETUP - DEBUG INFO")
-print("="*80)
-print(f"__file__ = {__file__}")
-print(f"sys.path BEFORE modification:")
 for p in sys.path[:5]:
     print(f"  - {p}")
-
 # Add project root to Python path (Kaggle and Local compatible)
 project_root = Path(__file__).parent.parent
-print(f"\nproject_root = {project_root}")
-print(f"project_root exists? {project_root.exists()}")
 
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
@@ -51,11 +41,6 @@ for kaggle_path in kaggle_dataset_paths:
             sys.path.insert(0, str(kaggle_path))
             print(f"  ✓ Added {kaggle_path} to sys.path")
         break
-
-print(f"\nsys.path AFTER modification:")
-for p in sys.path[:5]:
-    print(f"  - {p}")
-
 # Check if src module is findable
 src_path = Path(sys.path[0]) / "src"
 print(f"\nLooking for src at: {src_path}")
@@ -65,9 +50,6 @@ if src_path.exists():
     for item in src_path.iterdir():
         if item.suffix == '.py':
             print(f"  - {item.name}")
-
-print("="*80)
-print()
 
 import numpy as np
 import pandas as pd
@@ -309,7 +291,8 @@ class ReturnModelOptimizer:
         feature_cols: List[str],
         n_trials: int = 50,
         timeout: Optional[int] = None,
-        objective_type: str = 'combined'
+        objective_type: str = 'combined',
+        model_type: str = 'lightgbm'
     ) -> Dict:
         """
         Step 4: Hyperparameter tuning with Optuna.
@@ -330,6 +313,8 @@ class ReturnModelOptimizer:
             - 'ic': Maximize Information Coefficient
             - 'spread': Maximize Long-Short Spread
             - 'combined': Maximize IC + Spread (RECOMMENDED)
+        model_type : str
+            Model type: 'lightgbm' or 'catboost'
             
         Returns
         -------
@@ -349,7 +334,8 @@ class ReturnModelOptimizer:
                 timeout=timeout,
                 n_jobs=1,
                 random_state=42,
-                objective_type=objective_type  # ← New parameter
+                objective_type=objective_type,
+                model_type=model_type  # ← Pass model_type to ensure consistency
             )
             
             # Run optimization
@@ -403,7 +389,8 @@ class ReturnModelOptimizer:
         self,
         df: pd.DataFrame,
         feature_cols: List[str],
-        best_params: Dict
+        best_params: Dict,
+        model_type: str = 'lightgbm'
     ) -> Tuple[ReturnPredictor, np.ndarray, float]:
         """
         Step 5: Train final model with best parameters.
@@ -416,6 +403,8 @@ class ReturnModelOptimizer:
             Feature column names
         best_params : Dict
             Best hyperparameters from tuning
+        model_type : str
+            Model type: 'lightgbm' or 'catboost' (must match step 4)
             
         Returns
         -------
@@ -429,7 +418,7 @@ class ReturnModelOptimizer:
         with Timer("Final Model Training", logger):
             # Create predictor with best params
             predictor = ReturnPredictor(
-                model_type='lightgbm',
+                model_type=model_type,  # ← Use same model_type as step 4
                 config_path=self.config_path
             )
             
@@ -844,7 +833,8 @@ class ReturnModelOptimizer:
         # Step 4: Hyperparameter Tuning
         n_trials: int = 50,
         timeout: Optional[int] = None,
-        objective_type: str = 'combined',  # ← New parameter
+        objective_type: str = 'combined',
+        model_type: str = 'lightgbm',  # ← NEW: Model type for both tuning and training
         # Step 5: Final Model Training
         # Step 5.5: Ensemble Models (optional)
         enable_ensemble: bool = False,
@@ -898,14 +888,16 @@ class ReturnModelOptimizer:
             selected_features,
             n_trials=n_trials,
             timeout=timeout,
-            objective_type=objective_type  # ← Pass new parameter
+            objective_type=objective_type,
+            model_type=model_type  # ← Pass model_type to ensure consistency
         )
         
         # Step 5: Train final model
         predictor, oof_preds, oof_score = self.step5_train_final_model(
             train_selected,
             selected_features,
-            best_params
+            best_params,
+            model_type=model_type  # ← Use same model_type as step 4
         )
         
         # Step 5.5: Ensemble Models (optional)
@@ -965,6 +957,7 @@ def main():
         n_trials=50,  # ⬆️ Increased from 1 to 50 for proper optimization
         timeout=None,  # Or set time limit in seconds (e.g., 3600 for 1 hour)
         objective_type='combined',  # 'rmse', 'ic', 'spread', or 'combined' (RECOMMENDED)
+        model_type='lightgbm',  # 'lightgbm' or 'catboost'
         # Ensemble Control
         enable_ensemble=False,
         n_ensemble_models=3,

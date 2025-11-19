@@ -161,9 +161,9 @@ tuning:
   lightgbm:
     # Fixed parameters (not tuned)
     fixed_params:
-      boosting_type: "gbdt"
-      objective: "regression"
-      metric: "rmse"
+      # boosting_type: "gbdt"
+      # objective: "regression"
+      # metric: "rmse"
       verbosity: -1
       random_state: 42
     

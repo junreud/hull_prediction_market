@@ -160,8 +160,8 @@ class ReturnModelOptimizer:
     def step2_feature_engineering(
         self,
         df: pd.DataFrame,
-        add_time_features: bool = True,
-        add_regime_features: bool = True
+        # add_time_features: bool = True,
+        # add_regime_features: bool = True
     ) -> pd.DataFrame:
         """
         Step 2: Feature engineering.
@@ -802,17 +802,18 @@ class ReturnModelOptimizer:
         
         if 'final_model' in self.results:
             logger.info(f"\nFinal Model:")
-            logger.info(f"  OOF Score (RMSE): {self.results['final_model']['oof_score']:.6f}")
             logger.info(f"  Folds: {self.results['final_model']['n_folds']}")
+            logger.info(f"OOF Score (RMSE): {self.results['final_model']['oof_score']:.6f}")
+            
             
             # Return Model Metrics
             if 'return_model_metrics' in self.results['final_model']:
                 metrics = self.results['final_model']['return_model_metrics']
-                logger.info(f"\n  📊 Return Model Performance:")
-                logger.info(f"    Directional Accuracy: {metrics['directional_accuracy']:.2%}")
-                logger.info(f"    Information Coefficient: {metrics['information_coefficient']:.4f}")
-                logger.info(f"    Correlation: {metrics['correlation']:.4f}")
-                logger.info(f"    Long-Short Spread: {metrics['long_short_spread']:.4%}")
+                # logger.info(f"\n  📊 Return Model Performance:")
+                # logger.info(f"    Directional Accuracy: {metrics['directional_accuracy']:.2%}")
+                logger.info(f"Information Coefficient: {metrics['information_coefficient']:.4f}")
+                # logger.info(f"    Correlation: {metrics['correlation']:.4f}")
+                logger.info(f"Long-Short Spread: {metrics['long_short_spread']:.4%}")
         
         if 'interpretation' in self.results:
             logger.info(f"\nTop 10 Most Important Features:")
@@ -873,8 +874,8 @@ class ReturnModelOptimizer:
         # Step 2: Feature engineering
         train_engineered = self.step2_feature_engineering(
             train_df,
-            add_time_features=add_time_features,
-            add_regime_features=add_regime_features
+            # add_time_features=add_time_features,
+            # add_regime_features=add_regime_features
         )
         
         # Step 3: Feature selection
@@ -951,10 +952,10 @@ def main():
         normalize=False,
         scale=False,
         # Feature Engineering (new features)
-        add_time_features=True,
-        add_regime_features=True,
+        # add_time_features=True,
+        # add_regime_features=True,
         # Feature Selection
-        selection_method='correlation',  # or 'mutual_info'
+        selection_method='variance',  # or 'mutual_info' or 'variance'
         top_n_features=200,
         remove_correlated=True,
         corr_threshold=0.95,
@@ -962,7 +963,7 @@ def main():
         n_trials=50,  # ⬆️ Increased from 1 to 50 for proper optimization
         timeout=None,  # Or set time limit in seconds (e.g., 3600 for 1 hour)
         objective_type='combined',  # 'rmse', 'ic', 'spread', or 'combined' (RECOMMENDED)
-        model_type='catboost',  # 'lightgbm' or 'catboost' step5 에서 같이 맞춰줄것
+        model_type='lightgbm',  # 'lightgbm' or 'catboost' step5 에서 같이 맞춰줄것
         n_jobs=1,  # Number of parallel jobs (1=sequential, -1=all CPUs)
         # Ensemble Control
         enable_ensemble=False,

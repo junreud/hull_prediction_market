@@ -48,7 +48,7 @@ def convert_lgbm_to_catboost_params(lgbm_params: Dict[str, Any]) -> Dict[str, An
     
     # Parameter mapping: LightGBM -> CatBoost
     param_mapping = {
-        'num_leaves': 'max_leaves',
+        'num_leaves': None,  # Will convert to depth below
         'learning_rate': 'learning_rate',
         'n_estimators': 'iterations',
         'max_depth': 'depth',
@@ -80,6 +80,13 @@ def convert_lgbm_to_catboost_params(lgbm_params: Dict[str, Any]) -> Dict[str, An
                     catboost_params['verbose'] = False if lgbm_value <= 0 else True
                 else:
                     catboost_params[catboost_key] = lgbm_value
+            elif lgbm_key == 'num_leaves':
+                # Convert num_leaves to approximate depth
+                # num_leaves = 2^depth, so depth = log2(num_leaves)
+                import math
+                if 'depth' not in catboost_params:
+                    approx_depth = int(math.log2(lgbm_value)) if lgbm_value > 1 else 1
+                    catboost_params['depth'] = min(approx_depth, 16)  # CatBoost max depth is 16
         else:
             # Keep unknown parameters as is (might be CatBoost-specific)
             if lgbm_key not in ['boosting_type', 'objective', 'metric']:
@@ -92,6 +99,8 @@ def convert_lgbm_to_catboost_params(lgbm_params: Dict[str, Any]) -> Dict[str, An
         catboost_params['verbose'] = False
     if 'allow_writing_files' not in catboost_params:
         catboost_params['allow_writing_files'] = False
+    if 'task_type' not in catboost_params:
+        catboost_params['task_type'] = 'CPU'
     
     return catboost_params
 

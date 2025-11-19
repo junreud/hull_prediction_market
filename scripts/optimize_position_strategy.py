@@ -97,8 +97,8 @@ class PositionStrategyOptimizer:
     
     def step1_load_predictions(
         self,
-        return_model_dir: str = "artifacts/models_optimized",
-        risk_model_dir: str = "artifacts/models_risk_optimized"
+        return_model_dir: str = "/kaggle/working/artifacts/models_optimized",
+        risk_model_dir: str = "/kaggle/working/artifacts/models_risk_optimized"
     ) -> Tuple[pd.DataFrame, np.ndarray, np.ndarray]:
         """
         Step 1: Load or generate return and risk predictions.
@@ -106,9 +106,9 @@ class PositionStrategyOptimizer:
         Parameters
         ----------
         return_model_dir : str
-            Directory containing return models
+            Directory containing return models (defaults to Kaggle path, falls back to local)
         risk_model_dir : str
-            Directory containing risk models
+            Directory containing risk models (defaults to Kaggle path, falls back to local)
             
         Returns
         -------
@@ -147,25 +147,47 @@ class PositionStrategyOptimizer:
             train_df = feature_engineer.fit_transform(train_df)
             logger.info(f"✓ Features created: {train_df.shape[1]} columns")
             
-            # Try to load existing predictions
-            return_pred_path = Path("artifacts/oof_return_predictions.npy")
-            risk_pred_path = Path("artifacts/oof_risk_predictions.npy")
+            # Try to load existing predictions (check both Kaggle and local paths)
+            # Kaggle path
+            return_pred_path_kaggle = Path("/kaggle/working/artifacts/oof_return_predictions.npy")
+            risk_pred_path_kaggle = Path("/kaggle/working/artifacts/oof_risk_predictions.npy")
+            # Local path
+            return_pred_path_local = Path("artifacts/oof_return_predictions.npy")
+            risk_pred_path_local = Path("artifacts/oof_risk_predictions.npy")
             
-            if return_pred_path.exists() and risk_pred_path.exists():
-                logger.info("\n1.3 Loading existing OOF predictions...")
-                r_hat = np.load(return_pred_path)
-                sigma_hat = np.load(risk_pred_path)
+            # Check Kaggle path first, then local
+            if return_pred_path_kaggle.exists() and risk_pred_path_kaggle.exists():
+                logger.info("\n1.3 Loading existing OOF predictions (Kaggle)...")
+                r_hat = np.load(return_pred_path_kaggle)
+                sigma_hat = np.load(risk_pred_path_kaggle)
+                logger.info(f"✓ Loaded predictions: r_hat={r_hat.shape}, sigma_hat={sigma_hat.shape}")
+            elif return_pred_path_local.exists() and risk_pred_path_local.exists():
+                logger.info("\n1.3 Loading existing OOF predictions (Local)...")
+                r_hat = np.load(return_pred_path_local)
+                sigma_hat = np.load(risk_pred_path_local)
                 logger.info(f"✓ Loaded predictions: r_hat={r_hat.shape}, sigma_hat={sigma_hat.shape}")
             else:
                 logger.info("\n1.3 Generating OOF predictions from models...")
+                # Auto-detect model directory (Kaggle or local)
+                return_model_path = Path(return_model_dir)
+                risk_model_path = Path(risk_model_dir)
+                
+                # Fallback to local paths if Kaggle paths don't exist
+                if not return_model_path.exists():
+                    return_model_dir = "artifacts/models_optimized"
+                    risk_model_dir = "artifacts/models_risk_optimized"
+                    logger.info(f"  Kaggle paths not found, using local: {return_model_dir}")
+                
                 r_hat, sigma_hat = self._generate_oof_predictions(
                     train_df, return_model_dir, risk_model_dir
                 )
                 
-                # Save predictions
-                np.save(return_pred_path, r_hat)
-                np.save(risk_pred_path, sigma_hat)
-                logger.info(f"✓ Saved predictions to artifacts/")
+                # Save predictions (prefer Kaggle path if available)
+                save_dir = Path("/kaggle/working/artifacts") if Path("/kaggle/working").exists() else Path("artifacts")
+                save_dir.mkdir(parents=True, exist_ok=True)
+                np.save(save_dir / "oof_return_predictions.npy", r_hat)
+                np.save(save_dir / "oof_risk_predictions.npy", sigma_hat)
+                logger.info(f"✓ Saved predictions to {save_dir}/")
             
             # Validate predictions
             valid_mask = ~(np.isnan(r_hat) | np.isnan(sigma_hat))
@@ -903,8 +925,8 @@ class PositionStrategyOptimizer:
     
     def run_full_optimization(
         self,
-        return_model_dir: str = "artifacts/models_optimized",
-        risk_model_dir: str = "artifacts/models_risk_optimized",
+        return_model_dir: str = "/kaggle/working/artifacts/models_optimized",
+        risk_model_dir: str = "/kaggle/working/artifacts/models_risk_optimized",
         n_trials_sharpe: int = 100,
         n_trials_quantile: int = 100,
         predict_test: bool = False
@@ -1027,8 +1049,8 @@ def main():
     
     # Run full optimization
     results = optimizer.run_full_optimization(
-        return_model_dir="artifacts/models_optimized",
-        risk_model_dir="artifacts/models_risk_optimized",
+        return_model_dir="/kaggle/working/artifacts/models_optimized",
+        risk_model_dir="/kaggle/working/artifacts/models_risk_optimized",
         n_trials_sharpe=100,      # Adjust based on time/resources
         n_trials_quantile=100,    # Adjust based on time/resources
         predict_test=True         # Generate submission.parquet

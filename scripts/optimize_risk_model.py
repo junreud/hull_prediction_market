@@ -191,23 +191,6 @@ class RiskModelOptimizer:
         
         with Timer("Feature Engineering", logger):
             df_engineered = df.copy()
-            
-            # Add time period features
-            if add_time_features:
-                logger.info("\n2.1 Adding time period features...")
-                df_engineered = self.feature_engineer.create_time_period_features(df_engineered)
-                logger.info(f"✓ Time period features added")
-            
-            # Add market regime features
-            if add_regime_features:
-                logger.info("\n2.2 Adding market regime features...")
-                df_engineered = self.feature_engineer.create_market_regime_features(
-                    df_engineered,
-                    auto_detect=True,
-                    vol_threshold=2.0
-                )
-                logger.info(f"✓ Market regime features added")
-            
             # Standard feature engineering
             logger.info("\n2.3 Creating engineered features...")
             df_engineered = self.feature_engineer.fit_transform(df_engineered)

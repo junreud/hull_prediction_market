@@ -20,6 +20,7 @@ zip -r "$ZIP_FILE" \
     scripts/optimize_return_model.py \
     scripts/optimize_risk_model.py \
     scripts/optimize_position_strategy.py \
+    scripts/optimize_ensemble.py \
     conf/params.yaml \
     -x "*.pyc" \
     -x "*__pycache__/*" \

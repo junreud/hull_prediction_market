@@ -144,7 +144,7 @@ class ReturnModelOptimizer:
                 normalize_method='rank_gauss',
                 scale=scale,
                 scale_method='robust',
-                window=60
+                window=60,
             )
             
             logger.info(f"✓ Preprocessing complete: {train_processed.shape}")
@@ -292,7 +292,8 @@ class ReturnModelOptimizer:
         n_trials: int = 50,
         timeout: Optional[int] = None,
         objective_type: str = 'combined',
-        model_type: str = 'lightgbm'
+        model_type: str = 'lightgbm',
+        n_jobs: int = 1
     ) -> Dict:
         """
         Step 4: Hyperparameter tuning with Optuna.
@@ -315,6 +316,8 @@ class ReturnModelOptimizer:
             - 'combined': Maximize IC + Spread (RECOMMENDED)
         model_type : str
             Model type: 'lightgbm' or 'catboost'
+        n_jobs : int
+            Number of parallel jobs (default: 1)
             
         Returns
         -------
@@ -332,10 +335,10 @@ class ReturnModelOptimizer:
                 config_section='tuning',
                 n_trials=n_trials,
                 timeout=timeout,
-                n_jobs=1,
+                n_jobs=n_jobs,
                 random_state=42,
                 objective_type=objective_type,
-                model_type=model_type  # ← Pass model_type to ensure consistency
+                model_type=model_type
             )
             
             # Run optimization
@@ -834,7 +837,8 @@ class ReturnModelOptimizer:
         n_trials: int = 50,
         timeout: Optional[int] = None,
         objective_type: str = 'combined',
-        model_type: str = 'lightgbm',  # ← NEW: Model type for both tuning and training
+        model_type: str = 'lightgbm',
+        n_jobs: int = 1,
         # Step 5: Final Model Training
         # Step 5.5: Ensemble Models (optional)
         enable_ensemble: bool = False,
@@ -889,7 +893,8 @@ class ReturnModelOptimizer:
             n_trials=n_trials,
             timeout=timeout,
             objective_type=objective_type,
-            model_type=model_type  # ← Pass model_type to ensure consistency
+            model_type=model_type,
+            n_jobs=n_jobs
         )
         
         # Step 5: Train final model
@@ -943,8 +948,8 @@ def main():
     results = optimizer.run_full_optimization(
         # Preprocessing (data cleaning)
         handle_outliers=True,
-        normalize=True,
-        scale=True,
+        normalize=False,
+        scale=False,
         # Feature Engineering (new features)
         add_time_features=True,
         add_regime_features=True,
@@ -957,7 +962,8 @@ def main():
         n_trials=50,  # ⬆️ Increased from 1 to 50 for proper optimization
         timeout=None,  # Or set time limit in seconds (e.g., 3600 for 1 hour)
         objective_type='combined',  # 'rmse', 'ic', 'spread', or 'combined' (RECOMMENDED)
-        model_type='lightgbm',  # 'lightgbm' or 'catboost'
+        model_type='catboost',  # 'lightgbm' or 'catboost' step5 에서 같이 맞춰줄것
+        n_jobs=1,  # Number of parallel jobs (1=sequential, -1=all CPUs)
         # Ensemble Control
         enable_ensemble=False,
         n_ensemble_models=3,

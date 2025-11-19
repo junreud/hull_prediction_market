@@ -378,7 +378,7 @@ class OptunaLightGBMTuner:
                 study_name=study_name,
                 storage=storage,
                 load_if_exists=load_if_exists,
-                direction='minimize',
+                direction='minimize',  # Always minimize (IC/Spread are negated in _objective)
                 sampler=sampler,
                 pruner=pruner
             )
@@ -446,16 +446,28 @@ class OptunaLightGBMTuner:
             # Add fixed parameters
             params.update(self.fixed_params)
             
-            # Add default parameters
-            default_params = {
-                'boosting_type': 'gbdt',
-                'objective': 'regression',
-                'metric': 'rmse',
-                'verbosity': -1,
-                'random_state': self.random_state,
-                'n_estimators': 1000,
-                'early_stopping_rounds': 50
-            }
+            # Add default parameters based on model type
+            if self.model_type == 'lightgbm':
+                default_params = {
+                    'boosting_type': 'gbdt',
+                    'objective': 'regression',
+                    'metric': 'rmse',
+                    'verbosity': -1,
+                    'random_state': self.random_state,
+                    'n_estimators': 1000,
+                    'early_stopping_rounds': 50
+                }
+            elif self.model_type == 'catboost':
+                default_params = {
+                    'loss_function': 'RMSE',
+                    'verbose': False,
+                    'random_seed': self.random_state,
+                    'iterations': 1000,
+                    'early_stopping_rounds': 50,
+                    'allow_writing_files': False
+                }
+            else:
+                default_params = {}
             
             for key, value in default_params.items():
                 if key not in params:

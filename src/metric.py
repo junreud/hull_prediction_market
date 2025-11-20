@@ -112,10 +112,11 @@ class CompetitionMetric:
         float
             Return penalty factor (≥ 1.0)
         """
-        # Calculate return gap (annualized percentage points)
+        # Calculate return gap (matching Kaggle's validation.py - note: order is intentional)
+        # Kaggle uses: * 100 * 252 (not * 252 * 100)
         return_gap = max(
             0.0,
-            (market_mean_excess_return - strategy_mean_excess_return) * trading_days_per_yr * 100
+            (market_mean_excess_return - strategy_mean_excess_return) * 100 * trading_days_per_yr
         )
         
         # Apply quadratic penalty
@@ -252,10 +253,10 @@ class CompetitionMetric:
         else:
             return_penalty = 1.0
         
-        # Calculate return gap for reporting
+        # Calculate return gap for reporting (same order as validation.py)
         return_gap = max(
             0.0,
-            (market_mean_excess_return - strategy_mean_excess_return) * trading_days_per_yr * 100
+            (market_mean_excess_return - strategy_mean_excess_return) * 100 * trading_days_per_yr
         )
         
         # Calculate final score (adjusted Sharpe)

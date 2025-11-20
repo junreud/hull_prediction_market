@@ -58,7 +58,7 @@ class OptunaLightGBMTuner:
         config_section: str = "tuning",
         n_trials: int = 100,
         timeout: Optional[int] = None,
-        n_jobs: int = 1,
+        n_jobs: int = 5,
         random_state: int = 42,
         objective_type: str = 'combined',  # 'rmse', 'ic', 'spread', 'combined'
         model_type: str = 'lightgbm'  # 'lightgbm' or 'catboost'

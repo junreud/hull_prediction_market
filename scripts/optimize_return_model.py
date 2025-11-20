@@ -292,6 +292,7 @@ class ReturnModelOptimizer:
         self,
         df: pd.DataFrame,
         feature_cols: List[str],
+        enable_tuning: bool = True,
         n_trials: int = 50,
         timeout: Optional[int] = None,
         objective_type: str = 'combined',
@@ -331,66 +332,74 @@ class ReturnModelOptimizer:
         logger.info("STEP 4: HYPERPARAMETER TUNING")
         logger.info("="*80)
         
-        with Timer("Hyperparameter Tuning", logger):
-            # Create tuner
-            tuner = OptunaLightGBMTuner(
-                config_path=self.config_path,
-                config_section='tuning',
-                n_trials=n_trials,
-                timeout=timeout,
-                n_jobs=n_jobs,
-                random_state=42,
-                objective_type=objective_type,
-                model_type=model_type
-            )
-            
-            # Run optimization
-            logger.info(f"\n4.1 Running Optuna optimization ({n_trials} trials)...")
-            best_params = tuner.optimize(
-                df=df,
-                feature_cols=feature_cols,
-                target_col='forward_returns',
-                study_name='return_lgbm_tuning'
-            )
-            
-            # Get best score from tuner
-            best_score = tuner.best_score
-            
-            logger.info(f"\n✓ Hyperparameter tuning complete")
-            
-            # Log objective-specific results
-            if objective_type == 'combined' and hasattr(tuner.study.best_trial, 'user_attrs'):
-                ic = tuner.study.best_trial.user_attrs.get('ic', None)
-                spread = tuner.study.best_trial.user_attrs.get('spread', None)
-                if ic is not None and spread is not None:
-                    actual_score = -best_score  # Negate back to get actual score
-                    logger.info(f"\n📊 Optimization Results:")
-                    logger.info(f"  Combined Score: {actual_score:.6f}")
-                    logger.info(f"  → IC: {ic:.6f}")
-                    logger.info(f"  → Spread: {spread:.6f} ({spread*100:.4f}%)")
-                    logger.info(f"  (Note: Best score is negated for Optuna minimization)")
-            elif objective_type == 'ic':
-                logger.info(f"  Best IC: {-best_score:.6f}")
-            elif objective_type == 'spread':
-                logger.info(f"  Best Spread: {-best_score:.6f} ({-best_score*100:.4f}%)")
-            
-            # Store results
-            self.results['hyperparameter_tuning'] = {
-                'n_trials': n_trials,
-                'best_score': best_score,
-                'actual_score': -best_score if objective_type != 'rmse' else best_score,
-                'objective_type': objective_type,
-                'best_params': best_params
-            }
-            
-            # Save best parameters
-            output_dir = Path("artifacts")
-            output_dir.mkdir(parents=True, exist_ok=True)
-            with open(output_dir / 'lightgbm_best_params_optimized.json', 'w') as f:
-                json.dump(best_params, f, indent=2)
-            
+        if enable_tuning:
+            with Timer("Hyperparameter Tuning", logger):
+                # Create tuner
+                tuner = OptunaLightGBMTuner(
+                    config_path=self.config_path,
+                    config_section='tuning',
+                    n_trials=n_trials,
+                    timeout=timeout,
+                    n_jobs=n_jobs,
+                    random_state=42,
+                    objective_type=objective_type,
+                    model_type=model_type
+                )
+                
+                # Run optimization
+                logger.info(f"\n4.1 Running Optuna optimization ({n_trials} trials)...")
+                best_params = tuner.optimize(
+                    df=df,
+                    feature_cols=feature_cols,
+                    target_col='forward_returns',
+                    study_name='return_lgbm_tuning'
+                )
+                
+                # Get best score from tuner
+                best_score = tuner.best_score
+                
+                logger.info(f"\n✓ Hyperparameter tuning complete")
+                
+                # Log objective-specific results
+                if objective_type == 'combined' and hasattr(tuner.study.best_trial, 'user_attrs'):
+                    ic = tuner.study.best_trial.user_attrs.get('ic', None)
+                    spread = tuner.study.best_trial.user_attrs.get('spread', None)
+                    if ic is not None and spread is not None:
+                        actual_score = -best_score  # Negate back to get actual score
+                        logger.info(f"\n📊 Optimization Results:")
+                        logger.info(f"  Combined Score: {actual_score:.6f}")
+                        logger.info(f"  → IC: {ic:.6f}")
+                        logger.info(f"  → Spread: {spread:.6f} ({spread*100:.4f}%)")
+                        logger.info(f"  (Note: Best score is negated for Optuna minimization)")
+                elif objective_type == 'ic':
+                    logger.info(f"  Best IC: {-best_score:.6f}")
+                elif objective_type == 'spread':
+                    logger.info(f"  Best Spread: {-best_score:.6f} ({-best_score*100:.4f}%)")
+                
+                # Store results
+                self.results['hyperparameter_tuning'] = {
+                    'n_trials': n_trials,
+                    'best_score': best_score,
+                    'actual_score': -best_score if objective_type != 'rmse' else best_score,
+                    'objective_type': objective_type,
+                    'best_params': best_params
+                }
+                
+                # Save best parameters
+                output_dir = Path("artifacts")
+                output_dir.mkdir(parents=True, exist_ok=True)
+                with open(output_dir / 'lightgbm_best_params_optimized.json', 'w') as f:
+                    json.dump(best_params, f, indent=2)
+
+                return best_params    
+        else:
+            logger.info("\n⏭️  Hyperparameter tuning disabled, skipping Step 4")
+            # Load existing best params
+            with open("artifacts/lightgbm_best_params_optimized.json", 'r') as f:
+                best_params = json.load(f)
+            logger.info(f"✓ Loaded existing best parameters")
             return best_params
-    
+        
     def step5_train_final_model(
         self,
         df: pd.DataFrame,
@@ -839,11 +848,12 @@ class ReturnModelOptimizer:
         remove_correlated: bool = True,
         corr_threshold: float = 0.95,
         # Step 4: Hyperparameter Tuning
+        enable_tuning: bool = True,
         n_trials: int = 50,
         timeout: Optional[int] = None,
         objective_type: str = 'combined',
         model_type: str = 'lightgbm',
-        n_jobs: int = 1,
+        n_jobs: int = 5,
         # Step 5: Final Model Training
         # Step 5.5: Ensemble Models (optional)
         enable_ensemble: bool = False,
@@ -896,6 +906,7 @@ class ReturnModelOptimizer:
         best_params = self.step4_hyperparameter_tuning(
             train_selected,
             selected_features,
+            enable_tuning=enable_tuning,
             n_trials=n_trials,
             timeout=timeout,
             objective_type=objective_type,
@@ -966,11 +977,12 @@ def main():
         remove_correlated=True,
         corr_threshold=0.95,
         # Hyperparameter Tuning
+        enable_tuning=True,
         n_trials=50,  # ⬆️ Increased from 1 to 50 for proper optimization
         timeout=None,  # Or set time limit in seconds (e.g., 3600 for 1 hour)
         objective_type='combined',  # 'rmse', 'ic', 'spread', or 'combined' (RECOMMENDED)
         model_type='lightgbm',  # 'lightgbm' or 'catboost' step5 에서 같이 맞춰줄것
-        n_jobs=1,  # Number of parallel jobs (1=sequential, -1=all CPUs)
+        n_jobs=5,  # Number of parallel jobs (1=sequential, -1=all CPUs)
         # Ensemble Control
         enable_ensemble=False,
         n_ensemble_models=3,

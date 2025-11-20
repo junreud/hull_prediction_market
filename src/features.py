@@ -129,45 +129,47 @@ class FeatureEngineering:
         if windows is None:
             windows = self.rolling_windows
         
-        df_new = df.copy()
+        # Collect all new features in a list for efficient concatenation
+        new_features = []
         
         for col in columns:
             if col not in df.columns:
                 logger.warning(f"Column {col} not found, skipping")
                 continue
             
+            col_features = {}
             for window in windows:
-                # Rolling mean
-                df_new[f'{col}_roll_mean_{window}'] = df[col].rolling(
-                    window=window, min_periods=1
-                ).mean()
+                # Calculate all rolling statistics
+                roll_mean = df[col].rolling(window=window, min_periods=1).mean()
+                roll_std = df[col].rolling(window=window, min_periods=1).std()
+                roll_min = df[col].rolling(window=window, min_periods=1).min()
+                roll_max = df[col].rolling(window=window, min_periods=1).max()
                 
-                # Rolling std
-                df_new[f'{col}_roll_std_{window}'] = df[col].rolling(
-                    window=window, min_periods=1
-                ).std()
-                
-                # Rolling min/max
-                df_new[f'{col}_roll_min_{window}'] = df[col].rolling(
-                    window=window, min_periods=1
-                ).min()
-                
-                df_new[f'{col}_roll_max_{window}'] = df[col].rolling(
-                    window=window, min_periods=1
-                ).max()
+                # Store features
+                col_features[f'{col}_roll_mean_{window}'] = roll_mean
+                col_features[f'{col}_roll_std_{window}'] = roll_std
+                col_features[f'{col}_roll_min_{window}'] = roll_min
+                col_features[f'{col}_roll_max_{window}'] = roll_max
                 
                 # Deviation from rolling mean
-                df_new[f'{col}_dev_{window}'] = (
-                    df[col] - df_new[f'{col}_roll_mean_{window}']
-                )
+                dev = df[col] - roll_mean
+                col_features[f'{col}_dev_{window}'] = dev
                 
-                # Z-score
-                std_col = df_new[f'{col}_roll_std_{window}']
-                df_new[f'{col}_zscore_{window}'] = np.where(
-                    std_col > 0,
-                    df_new[f'{col}_dev_{window}'] / std_col,
+                # Z-score (vectorized)
+                col_features[f'{col}_zscore_{window}'] = np.where(
+                    roll_std > 0,
+                    dev / roll_std,
                     0
                 )
+            
+            # Add all features for this column
+            new_features.append(pd.DataFrame(col_features, index=df.index))
+        
+        # Concatenate all new features at once
+        if new_features:
+            df_new = pd.concat([df] + new_features, axis=1)
+        else:
+            df_new = df.copy()
         
         logger.info(f"Created rolling features for {len(columns)} columns")
         return df_new
@@ -198,7 +200,8 @@ class FeatureEngineering:
         if lags is None:
             lags = self.lag_periods
         
-        df_new = df.copy()
+        # Collect all lag features for efficient concatenation
+        lag_features = {}
         
         for col in columns:
             if col not in df.columns:
@@ -206,7 +209,13 @@ class FeatureEngineering:
                 continue
             
             for lag in lags:
-                df_new[f'{col}_lag_{lag}'] = df[col].shift(lag)
+                lag_features[f'{col}_lag_{lag}'] = df[col].shift(lag)
+        
+        # Concatenate all lag features at once
+        if lag_features:
+            df_new = pd.concat([df, pd.DataFrame(lag_features, index=df.index)], axis=1)
+        else:
+            df_new = df.copy()
         
         logger.info(f"Created lag features for {len(columns)} columns")
         return df_new
@@ -237,7 +246,8 @@ class FeatureEngineering:
         if periods is None:
             periods = [1, 5, 10]
         
-        df_new = df.copy()
+        # Collect all difference features for efficient concatenation
+        diff_features = {}
         
         for col in columns:
             if col not in df.columns:
@@ -246,14 +256,20 @@ class FeatureEngineering:
             
             for period in periods:
                 # First difference (change)
-                df_new[f'{col}_diff_{period}'] = df[col].diff(period)
+                diff_features[f'{col}_diff_{period}'] = df[col].diff(period)
                 
                 # Percent change
-                df_new[f'{col}_pct_{period}'] = df[col].pct_change(period)
+                diff_features[f'{col}_pct_{period}'] = df[col].pct_change(period)
                 
                 # Second difference (acceleration)
                 if period == 1:
-                    df_new[f'{col}_accel'] = df_new[f'{col}_diff_1'].diff(1)
+                    diff_features[f'{col}_accel'] = df[col].diff(1).diff(1)
+        
+        # Concatenate all difference features at once
+        if diff_features:
+            df_new = pd.concat([df, pd.DataFrame(diff_features, index=df.index)], axis=1)
+        else:
+            df_new = df.copy()
         
         logger.info(f"Created difference features for {len(columns)} columns")
         return df_new

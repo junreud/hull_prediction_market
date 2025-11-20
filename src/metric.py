@@ -96,14 +96,14 @@ class CompetitionMetric:
         Calculate return penalty (as per validation.py).
         
         return_penalty = 1 + (return_gap^2) / 100
-        where return_gap = max(0, (market_return - strategy_return) * 100 * 252)
+        where return_gap = max(0, (market_return - strategy_return) * 252 * 100)
         
         Parameters
         ----------
         strategy_mean_excess_return : float
-            Strategy mean excess return (annualized)
+            Strategy mean excess return (daily)
         market_mean_excess_return : float
-            Market mean excess return (annualized)
+            Market mean excess return (daily)
         trading_days_per_yr : int
             Number of trading days per year (default: 252)
             
@@ -115,59 +115,13 @@ class CompetitionMetric:
         # Calculate return gap (annualized percentage points)
         return_gap = max(
             0.0,
-            (market_mean_excess_return - strategy_mean_excess_return) * 100 * trading_days_per_yr
+            (market_mean_excess_return - strategy_mean_excess_return) * trading_days_per_yr * 100
         )
         
         # Apply quadratic penalty
         penalty = 1.0 + (return_gap ** 2) / 100
         
         return penalty
-    
-    def calculate_sharpe_ratio(
-        self,
-        returns: np.ndarray,
-        risk_free_rate: Optional[np.ndarray] = None
-    ) -> float:
-        """
-        Calculate Sharpe ratio.
-        
-        Parameters
-        ----------
-        returns : np.ndarray
-            Array of returns
-        risk_free_rate : np.ndarray, optional
-            Risk-free rate for each period
-            
-        Returns
-        -------
-        float
-            Sharpe ratio
-        """
-        # Remove NaN values
-        valid_mask = ~np.isnan(returns)
-        returns_clean = returns[valid_mask]
-        
-        if len(returns_clean) < self.min_periods:
-            logger.warning(f"Insufficient data: {len(returns_clean)} < {self.min_periods}")
-            return 0.0
-        
-        # Adjust for risk-free rate if provided
-        if risk_free_rate is not None:
-            rfr_clean = risk_free_rate[valid_mask]
-            excess_returns = returns_clean - rfr_clean
-        else:
-            excess_returns = returns_clean
-        
-        mean_return = np.mean(excess_returns)
-        std_return = np.std(excess_returns, ddof=1)
-        
-        if std_return < self.eps:
-            logger.warning("Return volatility near zero")
-            return 0.0
-        
-        sharpe = mean_return / std_return
-        
-        return sharpe
     
     def calculate_score(
         self,
@@ -301,7 +255,7 @@ class CompetitionMetric:
         # Calculate return gap for reporting
         return_gap = max(
             0.0,
-            (market_mean_excess_return - strategy_mean_excess_return) * 100 * trading_days_per_yr
+            (market_mean_excess_return - strategy_mean_excess_return) * trading_days_per_yr * 100
         )
         
         # Calculate final score (adjusted Sharpe)

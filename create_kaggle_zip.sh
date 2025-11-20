@@ -5,7 +5,7 @@
 echo "📦 Creating Kaggle Dataset ZIP..."
 
 # ZIP 파일명
-ZIP_FILE="mydata.zip"
+ZIP_FILE="mydata2.zip"
 
 # 기존 ZIP 파일 삭제
 if [ -f "$ZIP_FILE" ]; then

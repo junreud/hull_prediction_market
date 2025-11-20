@@ -160,6 +160,7 @@ class ReturnModelOptimizer:
     def step2_feature_engineering(
         self,
         df: pd.DataFrame,
+        fit_transform: bool = True,
         # add_time_features: bool = True,
         # add_regime_features: bool = True
     ) -> pd.DataFrame:
@@ -186,22 +187,24 @@ class ReturnModelOptimizer:
         
         with Timer("Feature Engineering", logger):
             df_engineered = df.copy()
+            if not fit_transform:
+                breakpoint()
+            elif fit_transform:
+                # Standard feature engineering
+                logger.info("\n2.3 Creating engineered features...")
+                df_engineered = self.feature_engineer.fit_transform(df_engineered)
             
-            # Standard feature engineering
-            logger.info("\n2.3 Creating engineered features...")
-            df_engineered = self.feature_engineer.fit_transform(df_engineered)
-            
-            logger.info(f"\n✓ Feature engineering complete")
-            logger.info(f"  Original features: {len(self.feature_engineer.original_features)}")
-            logger.info(f"  Engineered features: {len(self.feature_engineer.engineered_features)}")
-            logger.info(f"  Total features: {df_engineered.shape[1] - 2}")
-            
-            # Store results
-            self.results['feature_engineering'] = {
-                'original_features': len(self.feature_engineer.original_features),
-                'engineered_features': len(self.feature_engineer.engineered_features),
-                'total_features': df_engineered.shape[1] - 2,
-            }
+                logger.info(f"\n✓ Feature engineering complete")
+                logger.info(f"  Original features: {len(self.feature_engineer.original_features)}")
+                logger.info(f"  Engineered features: {len(self.feature_engineer.engineered_features)}")
+                logger.info(f"  Total features: {df_engineered.shape[1] - 2}")
+                
+                # Store results
+                self.results['feature_engineering'] = {
+                    'original_features': len(self.feature_engineer.original_features),
+                    'engineered_features': len(self.feature_engineer.engineered_features),
+                    'total_features': df_engineered.shape[1] - 2,
+                }
             
             return df_engineered
     
@@ -827,6 +830,7 @@ class ReturnModelOptimizer:
         normalize: bool = True,
         scale: bool = True,
         # Step 2: Feature Engineering
+        fit_transform: bool = True,
         add_time_features: bool = True,
         add_regime_features: bool = True,
         # Step 3: Feature Selection
@@ -874,6 +878,7 @@ class ReturnModelOptimizer:
         # Step 2: Feature engineering
         train_engineered = self.step2_feature_engineering(
             train_df,
+            fit_transform=fit_transform,
             # add_time_features=add_time_features,
             # add_regime_features=add_regime_features
         )
@@ -949,14 +954,15 @@ def main():
     results = optimizer.run_full_optimization(
         # Preprocessing (data cleaning)
         handle_outliers=True,
-        normalize=False,
-        scale=False,
+        normalize=True,
+        scale=True,
         # Feature Engineering (new features)
+        fit_transform=True,
         # add_time_features=True,
         # add_regime_features=True,
         # Feature Selection
-        selection_method='variance',  # or 'mutual_info' or 'variance'
-        top_n_features=200,
+        selection_method='correlation',  # or 'mutual_info' or 'variance'
+        top_n_features=100,
         remove_correlated=True,
         corr_threshold=0.95,
         # Hyperparameter Tuning

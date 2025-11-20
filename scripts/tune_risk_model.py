@@ -15,7 +15,7 @@ sys.path.insert(0, str(project_root))
 import pandas as pd
 import numpy as np
 from src.data import DataLoader
-from src.features import FeatureEngineering
+from src.features_risk import FeatureRiskEngineering
 from src.risk import RiskLabeler
 from src.tuner import OptunaLightGBMTuner
 from src.utils import get_logger, load_config, Timer
@@ -77,7 +77,7 @@ def tune_risk_model(
     logger.info("Step 2: Feature Engineering")
     
     with Timer("Feature engineering"):
-        engineer = FeatureEngineering(config_path)
+        engineer = FeatureRiskEngineering(config_path)
         df_engineered = engineer.fit_transform(df_train)
     
     logger.info(f"Features created: {df_engineered.shape[1]}")
@@ -91,7 +91,7 @@ def tune_risk_model(
     with Timer("Feature selection"):
         df_selected, feature_cols = engineer.select_features_by_importance(
             df_engineered,
-            target_col='forward_returns',  # Forward returns created by FeatureEngineering
+            target_col='forward_returns',  # Forward returns created by FeatureRiskEngineering
             method='correlation',
             top_n=100
         )

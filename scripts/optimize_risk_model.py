@@ -58,7 +58,7 @@ from typing import Dict, List, Tuple, Optional
 from sklearn.metrics import mean_squared_error
 
 from src.data import DataLoader
-from src.features import FeatureEngineering
+from src.features_risk import FeatureRiskEngineering
 from src.tuner import OptunaLightGBMTuner
 from src.risk import RiskLabeler, RiskForecaster
 from src.interpretability import ModelInterpreter
@@ -87,7 +87,7 @@ class RiskModelOptimizer:
         
         # Components
         self.data_loader = DataLoader(config_path)
-        self.feature_engineer = FeatureEngineering(config_path)
+        self.feature_engineer = FeatureRiskEngineering(config_path)
         
         # Risk labeler
         risk_config = self.config.get('risk', {}).get('label', {})

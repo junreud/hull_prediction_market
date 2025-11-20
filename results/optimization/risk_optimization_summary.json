@@ -113,7 +113,7 @@
   },
   "hyperparameter_tuning": {
     "n_trials": 1,
-    "best_score": 0.0040757457451365,
+    "best_score": -0.36317247339313213,
     "best_params": {
       "num_leaves": 39,
       "learning_rate": 0.17254716573280354,
@@ -126,7 +126,7 @@
     }
   },
   "final_model": {
-    "oof_score": 0.0034269996314667222,
+    "oof_score": 0.0034241193327627243,
     "n_folds": 4
   },
   "interpretation": {

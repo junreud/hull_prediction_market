@@ -20,18 +20,20 @@ class CompetitionMetric:
     """
     Competition metric calculator.
     
-    Implements the modified Sharpe ratio with volatility penalty:
-    score = mean(strategy_returns) / std(strategy_returns) / vol_penalty
+    Implements the competition metric (matches validation.py):
+    adjusted_sharpe = sharpe / (vol_penalty * return_penalty)
     
     where:
-    - strategy_returns = allocation_t × forward_returns_t
+    - sharpe = strategy_mean_excess_return / strategy_std * sqrt(252)
     - vol_penalty = 1 + max(0, (strategy_vol / market_vol) - 1.2)
+    - return_penalty = 1 + (return_gap^2) / 100
+    - return_gap = max(0, (market_return - strategy_return) * 100 * 252)
     """
     
     def __init__(
         self,
         vol_threshold: float = 1.2,
-        underperformance_penalty: bool = False,
+        use_return_penalty: bool = True,
         min_periods: int = 30,
         eps: float = 1e-10
     ):
@@ -42,15 +44,15 @@ class CompetitionMetric:
         ----------
         vol_threshold : float
             Maximum allowed strategy volatility ratio (default: 1.2)
-        underperformance_penalty : bool
-            Whether to apply penalty for underperforming market (default: False)
+        use_return_penalty : bool
+            Whether to apply return penalty for underperforming market (default: True)
         min_periods : int
             Minimum number of periods required for valid calculation
         eps : float
             Small constant to prevent division by zero
         """
         self.vol_threshold = vol_threshold
-        self.underperformance_penalty = underperformance_penalty
+        self.use_return_penalty = use_return_penalty
         self.min_periods = min_periods
         self.eps = eps
         
@@ -84,51 +86,43 @@ class CompetitionMetric:
         
         return penalty
     
-    def calculate_sharpe_ratio(
+    def calculate_return_penalty(
         self,
-        returns: np.ndarray,
-        risk_free_rate: Optional[np.ndarray] = None
+        strategy_mean_excess_return: float,
+        market_mean_excess_return: float,
+        trading_days_per_yr: int = 252
     ) -> float:
         """
-        Calculate Sharpe ratio.
+        Calculate return penalty (as per validation.py).
+        
+        return_penalty = 1 + (return_gap^2) / 100
+        where return_gap = max(0, (market_return - strategy_return) * 252 * 100)
         
         Parameters
         ----------
-        returns : np.ndarray
-            Array of returns
-        risk_free_rate : np.ndarray, optional
-            Risk-free rate for each period
+        strategy_mean_excess_return : float
+            Strategy mean excess return (daily)
+        market_mean_excess_return : float
+            Market mean excess return (daily)
+        trading_days_per_yr : int
+            Number of trading days per year (default: 252)
             
         Returns
         -------
         float
-            Sharpe ratio
+            Return penalty factor (≥ 1.0)
         """
-        # Remove NaN values
-        valid_mask = ~np.isnan(returns)
-        returns_clean = returns[valid_mask]
+        # Calculate return gap (matching Kaggle's validation.py - note: order is intentional)
+        # Kaggle uses: * 100 * 252 (not * 252 * 100)
+        return_gap = max(
+            0.0,
+            (market_mean_excess_return - strategy_mean_excess_return) * 100 * trading_days_per_yr
+        )
         
-        if len(returns_clean) < self.min_periods:
-            logger.warning(f"Insufficient data: {len(returns_clean)} < {self.min_periods}")
-            return 0.0
+        # Apply quadratic penalty
+        penalty = 1.0 + (return_gap ** 2) / 100
         
-        # Adjust for risk-free rate if provided
-        if risk_free_rate is not None:
-            rfr_clean = risk_free_rate[valid_mask]
-            excess_returns = returns_clean - rfr_clean
-        else:
-            excess_returns = returns_clean
-        
-        mean_return = np.mean(excess_returns)
-        std_return = np.std(excess_returns, ddof=1)
-        
-        if std_return < self.eps:
-            logger.warning("Return volatility near zero")
-            return 0.0
-        
-        sharpe = mean_return / std_return
-        
-        return sharpe
+        return penalty
     
     def calculate_score(
         self,
@@ -138,7 +132,7 @@ class CompetitionMetric:
         risk_free_rate: Optional[np.ndarray] = None
     ) -> Dict[str, float]:
         """
-        Calculate competition score and related metrics.
+        Calculate competition score and related metrics (matches validation.py).
         
         Parameters
         ----------
@@ -155,14 +149,18 @@ class CompetitionMetric:
         -------
         dict
             Dictionary containing:
-            - score: Final competition score
+            - score: Final competition score (adjusted_sharpe)
             - sharpe: Sharpe ratio before penalty
             - vol_penalty: Volatility penalty factor
-            - strategy_vol: Strategy volatility
-            - market_vol: Market volatility
+            - return_penalty: Return penalty factor
+            - strategy_vol: Strategy volatility (annualized %)
+            - market_vol: Market volatility (annualized %)
             - vol_ratio: strategy_vol / market_vol
             - mean_return: Mean strategy return
             - std_return: Std strategy return
+            - strategy_mean_excess_return: Strategy mean excess return
+            - market_mean_excess_return: Market mean excess return
+            - return_gap: Return gap (annualized %)
             - vol_violation_rate: Fraction of periods violating threshold
         """
         # Input validation
@@ -185,11 +183,15 @@ class CompetitionMetric:
                 'score': 0.0,
                 'sharpe': 0.0,
                 'vol_penalty': 1.0,
+                'return_penalty': 1.0,
                 'strategy_vol': 0.0,
                 'market_vol': 0.0,
                 'vol_ratio': 0.0,
                 'mean_return': 0.0,
                 'std_return': 0.0,
+                'strategy_mean_excess_return': 0.0,
+                'market_mean_excess_return': 0.0,
+                'return_gap': 0.0,
                 'vol_violation_rate': 0.0,
                 'n_valid': len(allocations_clean)
             }
@@ -203,53 +205,91 @@ class CompetitionMetric:
         else:
             market_returns_clean = market_returns[valid_mask]
         
-        # Calculate volatilities
-        strategy_vol = np.std(strategy_returns, ddof=1)
-        market_vol = np.std(market_returns_clean, ddof=1)
-        
-        # Calculate Sharpe ratio
+        # Handle risk-free rate
         if risk_free_rate is not None:
             rfr_clean = risk_free_rate[valid_mask]
         else:
-            rfr_clean = None
+            rfr_clean = np.zeros_like(strategy_returns)
         
-        sharpe = self.calculate_sharpe_ratio(strategy_returns, rfr_clean)
+        # Calculate excess returns (matching validation.py)
+        strategy_excess_returns = strategy_returns - rfr_clean
+        market_excess_returns = market_returns_clean - rfr_clean
+        
+        # Calculate cumulative returns for mean calculation
+        strategy_excess_cumulative = (1 + strategy_excess_returns).prod()
+        market_excess_cumulative = (1 + market_excess_returns).prod()
+        
+        # Calculate mean excess returns (geometric mean)
+        n_periods = len(strategy_excess_returns)
+        strategy_mean_excess_return = (strategy_excess_cumulative) ** (1 / n_periods) - 1
+        market_mean_excess_return = (market_excess_cumulative) ** (1 / n_periods) - 1
+        
+        # Calculate volatilities (std of returns, not excess returns)
+        strategy_std = np.std(strategy_returns, ddof=1)
+        market_std = np.std(market_returns_clean, ddof=1)
+        
+        # Annualize volatilities (as percentage)
+        trading_days_per_yr = 252
+        strategy_vol = float(strategy_std * np.sqrt(trading_days_per_yr) * 100)
+        market_vol = float(market_std * np.sqrt(trading_days_per_yr) * 100)
+        
+        # Calculate Sharpe ratio (matching validation.py)
+        if strategy_std < self.eps:
+            logger.warning("Strategy volatility near zero")
+            sharpe = 0.0
+        else:
+            sharpe = strategy_mean_excess_return / strategy_std * np.sqrt(trading_days_per_yr)
         
         # Calculate volatility penalty
         vol_penalty = self.calculate_volatility_penalty(strategy_vol, market_vol)
         
-        # Calculate final score
-        if abs(sharpe) < self.eps or vol_penalty < self.eps:
+        # Calculate return penalty (if enabled)
+        if self.use_return_penalty:
+            return_penalty = self.calculate_return_penalty(
+                strategy_mean_excess_return,
+                market_mean_excess_return,
+                trading_days_per_yr
+            )
+        else:
+            return_penalty = 1.0
+        
+        # Calculate return gap for reporting (same order as validation.py)
+        return_gap = max(
+            0.0,
+            (market_mean_excess_return - strategy_mean_excess_return) * 100 * trading_days_per_yr
+        )
+        
+        # Calculate final score (adjusted Sharpe)
+        if abs(sharpe) < self.eps or vol_penalty < self.eps or return_penalty < self.eps:
             score = 0.0
         else:
-            score = sharpe / vol_penalty
+            score = sharpe / (vol_penalty * return_penalty)
+        
+        # Cap score at 1,000,000 (matching validation.py)
+        score = min(float(score), 1_000_000)
         
         # Additional diagnostics
         vol_ratio = strategy_vol / (market_vol + self.eps)
         mean_return = np.mean(strategy_returns)
-        std_return = strategy_vol
+        std_return = strategy_std
         
         # Calculate violation rate (rolling window check)
         # Approximate by checking if current vol_ratio exceeds threshold
         vol_violation_rate = float(vol_ratio > self.vol_threshold)
         
-        # Apply underperformance penalty if enabled
-        if self.underperformance_penalty:
-            mean_market = np.mean(market_returns_clean)
-            if mean_return < mean_market:
-                underperf_penalty = 1.0 + (mean_market - mean_return)
-                score = score / underperf_penalty
-                logger.info(f"Underperformance penalty applied: {underperf_penalty:.4f}")
-        
         return {
             'score': float(score),
             'sharpe': float(sharpe),
             'vol_penalty': float(vol_penalty),
+            'return_penalty': float(return_penalty),
             'strategy_vol': float(strategy_vol),
             'market_vol': float(market_vol),
             'vol_ratio': float(vol_ratio),
             'mean_return': float(mean_return),
             'std_return': float(std_return),
+            'strategy_mean_excess_return': float(strategy_mean_excess_return),
+            'market_mean_excess_return': float(market_mean_excess_return),
+            'return_gap': float(return_gap),
             'vol_violation_rate': float(vol_violation_rate),
             'n_valid': int(len(allocations_clean))
         }
@@ -613,7 +653,7 @@ def create_metric_calculator(
     # Merge config with kwargs
     params = {
         'vol_threshold': metric_config.get('vol_threshold', 1.2),
-        'underperformance_penalty': metric_config.get('underperformance_penalty', False),
+        'use_return_penalty': metric_config.get('use_return_penalty', True),
         'min_periods': metric_config.get('min_periods', 30),
     }
     params.update(kwargs)

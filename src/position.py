@@ -182,6 +182,10 @@ class SharpeScalingMapper(BasePositionMapper):
     def __init__(self, config_path: str = "conf/params.yaml"):
         """Initialize Sharpe scaling mapper."""
         super().__init__(config_path)
+
+        logger.info("="*80)
+        logger.info("Sharpe Scaling Mapper")
+        logger.info("="*80)
         
         sharpe_config = self.position_config.get('sharpe_scaling', {})
         self.k = float(sharpe_config.get('k', 1.0))
@@ -651,6 +655,10 @@ def create_position_mapper(
     BasePositionMapper
         Position mapper instance
     """
+    logger.info("="*80)
+    logger.info("Create Position Allocations")
+    logger.info("="*80)
+
     strategy_map = {
         'sharpe_scaling': SharpeScalingMapper,
         'quantile': QuantileBinningMapper,

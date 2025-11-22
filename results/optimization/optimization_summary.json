@@ -167,6 +167,8 @@
   "hyperparameter_tuning": {
     "n_trials": 50,
     "best_score": -0.2709351277680835,
+    "actual_score": 0.2709351277680835,
+    "objective_type": "combined",
     "best_params": {
       "num_leaves": 65,
       "learning_rate": 0.171296951578348,

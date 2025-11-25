@@ -381,30 +381,62 @@ class RegimeAwareCV(BaseCrossValidator):
         self.lookback_window = lookback_window
     
     def _detect_regimes(self, df: pd.DataFrame) -> np.ndarray:
-        """Detect market regimes based on volatility."""
+        """
+        Detect market regimes based on volatility and trend.
+        
+        Regimes:
+        0: Low Vol + Bear
+        1: Low Vol + Neutral
+        2: Low Vol + Bull
+        3: High Vol + Bear
+        4: High Vol + Neutral
+        5: High Vol + Bull
+        """
         if self.regime_col is not None and self.regime_col in df.columns:
             return df[self.regime_col].values
         
-        # Use forward_returns volatility to detect regimes
+        # Use forward_returns for regime detection
         if 'forward_returns' not in df.columns:
             raise ValueError("forward_returns column required for regime detection")
         
-        # Calculate rolling volatility
+        # 1. Calculate Volatility
         returns = df.groupby('date_id')['forward_returns'].mean()
         rolling_vol = returns.rolling(window=self.lookback_window, min_periods=5).std()
         
-        # Classify into 3 regimes based on volatility quantiles
-        vol_values = rolling_vol.values
-        q33 = np.nanpercentile(vol_values, 33)
-        q67 = np.nanpercentile(vol_values, 67)
+        # 2. Calculate Trend (Cumulative return over window)
+        rolling_return = returns.rolling(window=self.lookback_window, min_periods=5).sum()
         
+        # Get values
+        vol_values = rolling_vol.values
+        ret_values = rolling_return.values
+        
+        # Volatility Thresholds (Median split for simplicity, or 33/67)
+        # Using median split for Volatility (Low/High) to keep total regimes manageable (2x3=6)
+        vol_median = np.nanmedian(vol_values)
+        
+        # Trend Thresholds (33/67 split for Bear/Neutral/Bull)
+        ret_q33 = np.nanpercentile(ret_values, 33)
+        ret_q67 = np.nanpercentile(ret_values, 67)
+        
+        # Assign Regimes
+        # Structure: Vol (0=Low, 1=High) * 3 + Trend (0=Bear, 1=Neutral, 2=Bull)
         regimes = np.zeros(len(rolling_vol), dtype=int)
-        regimes[vol_values <= q33] = 0  # Low vol
-        regimes[(vol_values > q33) & (vol_values <= q67)] = 1  # Normal vol
-        regimes[vol_values > q67] = 2  # High vol
+        
+        # Low Volatility (0-2)
+        low_vol_mask = vol_values <= vol_median
+        regimes[low_vol_mask & (ret_values <= ret_q33)] = 0      # Low Vol + Bear
+        regimes[low_vol_mask & (ret_values > ret_q33) & (ret_values <= ret_q67)] = 1  # Low Vol + Neutral
+        regimes[low_vol_mask & (ret_values > ret_q67)] = 2      # Low Vol + Bull
+        
+        # High Volatility (3-5)
+        high_vol_mask = vol_values > vol_median
+        regimes[high_vol_mask & (ret_values <= ret_q33)] = 3     # High Vol + Bear
+        regimes[high_vol_mask & (ret_values > ret_q33) & (ret_values <= ret_q67)] = 4 # High Vol + Neutral
+        regimes[high_vol_mask & (ret_values > ret_q67)] = 5     # High Vol + Bull
         
         # Map back to original dataframe
         regime_map = dict(zip(returns.index, regimes))
+        # Fill NaN (start of series) with Neutral (Low Vol + Neutral = 1)
         df_regimes = df['date_id'].map(regime_map).fillna(1).astype(int).values
         
         return df_regimes

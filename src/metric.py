@@ -238,7 +238,7 @@ class CompetitionMetric:
             logger.warning("Strategy volatility near zero")
             sharpe = 0.0
         else:
-            sharpe = strategy_mean_excess_return / strategy_std * np.sqrt(trading_days_per_yr)
+            sharpe = strategy_mean_excess_return / strategy_std  # Removed annualization to match LB scale
         
         # Calculate volatility penalty
         vol_penalty = self.calculate_volatility_penalty(strategy_vol, market_vol)

@@ -30,6 +30,81 @@ from src.utils import get_logger, load_config, Timer
 logger = get_logger(log_file="logs/models.log", level="INFO")
 
 
+def convert_lgbm_to_catboost_params(lgbm_params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Convert LightGBM parameters to CatBoost parameters.
+    
+    Parameters
+    ----------
+    lgbm_params : dict
+        LightGBM parameters
+        
+    Returns
+    -------
+    dict
+        CatBoost parameters
+    """
+    catboost_params = {}
+    
+    # Parameter mapping: LightGBM -> CatBoost
+    param_mapping = {
+        'num_leaves': None,  # Will convert to depth below
+        'learning_rate': 'learning_rate',
+        'n_estimators': 'iterations',
+        'max_depth': 'depth',
+        'min_child_samples': 'min_data_in_leaf',
+        'feature_fraction': 'rsm',  # Random subspace method
+        'bagging_fraction': 'subsample',
+        'bagging_freq': None,  # CatBoost doesn't have exact equivalent
+        'reg_alpha': 'l2_leaf_reg',  # CatBoost uses L2 primarily
+        'reg_lambda': 'l2_leaf_reg',
+        'random_state': 'random_seed',
+        'verbosity': 'verbose',
+        'early_stopping_rounds': 'early_stopping_rounds',
+    }
+    
+    # Convert parameters
+    for lgbm_key, lgbm_value in lgbm_params.items():
+        if lgbm_key in param_mapping:
+            catboost_key = param_mapping[lgbm_key]
+            if catboost_key is not None:
+                # Special handling for specific parameters
+                if lgbm_key == 'reg_alpha' or lgbm_key == 'reg_lambda':
+                    # Combine both into l2_leaf_reg
+                    if 'l2_leaf_reg' not in catboost_params:
+                        catboost_params['l2_leaf_reg'] = lgbm_value
+                    else:
+                        catboost_params['l2_leaf_reg'] = max(catboost_params['l2_leaf_reg'], lgbm_value)
+                elif lgbm_key == 'verbosity':
+                    # Convert LightGBM verbosity (-1, 0, 1) to CatBoost (False/True)
+                    catboost_params['verbose'] = False if lgbm_value <= 0 else True
+                else:
+                    catboost_params[catboost_key] = lgbm_value
+            elif lgbm_key == 'num_leaves':
+                # Convert num_leaves to approximate depth
+                # num_leaves = 2^depth, so depth = log2(num_leaves)
+                import math
+                if 'depth' not in catboost_params:
+                    approx_depth = int(math.log2(lgbm_value)) if lgbm_value > 1 else 1
+                    catboost_params['depth'] = min(approx_depth, 16)  # CatBoost max depth is 16
+        else:
+            # Keep unknown parameters as is (might be CatBoost-specific)
+            if lgbm_key not in ['boosting_type', 'objective', 'metric']:
+                catboost_params[lgbm_key] = lgbm_value
+    
+    # Set CatBoost defaults
+    if 'loss_function' not in catboost_params:
+        catboost_params['loss_function'] = 'RMSE'
+    if 'verbose' not in catboost_params:
+        catboost_params['verbose'] = False
+    if 'allow_writing_files' not in catboost_params:
+        catboost_params['allow_writing_files'] = False
+    if 'task_type' not in catboost_params:
+        catboost_params['task_type'] = 'CPU'
+    
+    return catboost_params
+
+
 class ReturnPredictor:
     """
     Return prediction model using LightGBM or CatBoost.
@@ -196,8 +271,14 @@ class ReturnPredictor:
         except ImportError:
             raise ImportError("CatBoost not installed. Install with: pip install catboost")
         
+        # Convert LightGBM params to CatBoost params if needed
+        catboost_params = convert_lgbm_to_catboost_params(self.params)
+        
+        # Extract early_stopping_rounds separately (used in fit, not init)
+        early_stopping_rounds = catboost_params.pop('early_stopping_rounds', 50)
+        
         # Create model
-        model = CatBoostRegressor(**self.params)
+        model = CatBoostRegressor(**catboost_params)
         
         # Create pools
         train_pool = Pool(X_train, y_train)
@@ -209,6 +290,7 @@ class ReturnPredictor:
                 train_pool,
                 eval_set=val_pool,
                 use_best_model=True,
+                early_stopping_rounds=early_stopping_rounds,
                 verbose=100
             )
         

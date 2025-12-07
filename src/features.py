@@ -103,6 +103,43 @@ class FeatureEngineering:
             return [col for col in df.columns if col.startswith(prefix)]
         return []
     
+    def create_availability_features(
+        self,
+        df: pd.DataFrame,
+        columns: List[str]
+    ) -> pd.DataFrame:
+        """
+        Create availability flags for features with structural missingness.
+        
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input dataframe
+        columns : List[str]
+            Columns to check for availability
+            
+        Returns
+        -------
+        pd.DataFrame
+            Dataframe with availability features added
+        """
+        new_features = {}
+        
+        for col in columns:
+            if col not in df.columns:
+                continue
+                
+            # Create binary flag: 1 if data exists, 0 if NaN (pre-existence)
+            # This helps model distinguish between "value 0" and "value unknown"
+            new_features[f'{col}_is_available'] = df[col].notna().astype(int)
+            
+        if new_features:
+            df_new = pd.concat([df, pd.DataFrame(new_features, index=df.index)], axis=1)
+            logger.info(f"Created availability features for {len(new_features)} columns")
+            return df_new
+        
+        return df
+
     def create_rolling_features(
         self,
         df: pd.DataFrame,
@@ -129,45 +166,48 @@ class FeatureEngineering:
         if windows is None:
             windows = self.rolling_windows
         
-        df_new = df.copy()
+        # Collect all new features in a list for efficient concatenation
+        new_features = []
         
         for col in columns:
             if col not in df.columns:
                 logger.warning(f"Column {col} not found, skipping")
                 continue
             
+            col_features = {}
             for window in windows:
-                # Rolling mean
-                df_new[f'{col}_roll_mean_{window}'] = df[col].rolling(
-                    window=window, min_periods=1
-                ).mean()
+                # Calculate all rolling statistics
+                # Use min_periods=1 to get values as soon as data starts (structural missingness handling)
+                roll_mean = df[col].rolling(window=window, min_periods=1).mean()
+                roll_std = df[col].rolling(window=window, min_periods=1).std()
+                roll_min = df[col].rolling(window=window, min_periods=1).min()
+                roll_max = df[col].rolling(window=window, min_periods=1).max()
                 
-                # Rolling std
-                df_new[f'{col}_roll_std_{window}'] = df[col].rolling(
-                    window=window, min_periods=1
-                ).std()
-                
-                # Rolling min/max
-                df_new[f'{col}_roll_min_{window}'] = df[col].rolling(
-                    window=window, min_periods=1
-                ).min()
-                
-                df_new[f'{col}_roll_max_{window}'] = df[col].rolling(
-                    window=window, min_periods=1
-                ).max()
+                # Store features
+                col_features[f'{col}_roll_mean_{window}'] = roll_mean
+                col_features[f'{col}_roll_std_{window}'] = roll_std
+                col_features[f'{col}_roll_min_{window}'] = roll_min
+                col_features[f'{col}_roll_max_{window}'] = roll_max
                 
                 # Deviation from rolling mean
-                df_new[f'{col}_dev_{window}'] = (
-                    df[col] - df_new[f'{col}_roll_mean_{window}']
-                )
+                dev = df[col] - roll_mean
+                col_features[f'{col}_dev_{window}'] = dev
                 
-                # Z-score
-                std_col = df_new[f'{col}_roll_std_{window}']
-                df_new[f'{col}_zscore_{window}'] = np.where(
-                    std_col > 0,
-                    df_new[f'{col}_dev_{window}'] / std_col,
+                # Z-score (vectorized)
+                col_features[f'{col}_zscore_{window}'] = np.where(
+                    roll_std > 0,
+                    dev / roll_std,
                     0
                 )
+            
+            # Add all features for this column
+            new_features.append(pd.DataFrame(col_features, index=df.index))
+        
+        # Concatenate all new features at once
+        if new_features:
+            df_new = pd.concat([df] + new_features, axis=1)
+        else:
+            df_new = df.copy()
         
         logger.info(f"Created rolling features for {len(columns)} columns")
         return df_new
@@ -198,7 +238,8 @@ class FeatureEngineering:
         if lags is None:
             lags = self.lag_periods
         
-        df_new = df.copy()
+        # Collect all lag features for efficient concatenation
+        lag_features = {}
         
         for col in columns:
             if col not in df.columns:
@@ -206,7 +247,13 @@ class FeatureEngineering:
                 continue
             
             for lag in lags:
-                df_new[f'{col}_lag_{lag}'] = df[col].shift(lag)
+                lag_features[f'{col}_lag_{lag}'] = df[col].shift(lag)
+        
+        # Concatenate all lag features at once
+        if lag_features:
+            df_new = pd.concat([df, pd.DataFrame(lag_features, index=df.index)], axis=1)
+        else:
+            df_new = df.copy()
         
         logger.info(f"Created lag features for {len(columns)} columns")
         return df_new
@@ -237,7 +284,8 @@ class FeatureEngineering:
         if periods is None:
             periods = [1, 5, 10]
         
-        df_new = df.copy()
+        # Collect all difference features for efficient concatenation
+        diff_features = {}
         
         for col in columns:
             if col not in df.columns:
@@ -246,14 +294,22 @@ class FeatureEngineering:
             
             for period in periods:
                 # First difference (change)
-                df_new[f'{col}_diff_{period}'] = df[col].diff(period)
+                diff_features[f'{col}_diff_{period}'] = df[col].diff(period)
                 
                 # Percent change
-                df_new[f'{col}_pct_{period}'] = df[col].pct_change(period)
+                pct = df[col].pct_change(period)
+                # Handle infinite values from division by zero
+                diff_features[f'{col}_pct_{period}'] = pct.replace([np.inf, -np.inf], np.nan)
                 
                 # Second difference (acceleration)
                 if period == 1:
-                    df_new[f'{col}_accel'] = df_new[f'{col}_diff_1'].diff(1)
+                    diff_features[f'{col}_accel'] = df[col].diff(1).diff(1)
+        
+        # Concatenate all difference features at once
+        if diff_features:
+            df_new = pd.concat([df, pd.DataFrame(diff_features, index=df.index)], axis=1)
+        else:
+            df_new = df.copy()
         
         logger.info(f"Created difference features for {len(columns)} columns")
         return df_new
@@ -410,6 +466,134 @@ class FeatureEngineering:
         logger.info(f"Created regime features for {len(volatility_cols)} columns")
         return df_new
     
+    def handle_feature_nans(
+        self,
+        df: pd.DataFrame
+    ) -> pd.DataFrame:
+        """
+        Handle NaN values with feature-type-specific strategies.
+        
+        IMPORTANT: Only handles NaN values in ENGINEERED features.
+        Original features' NaN values are preserved as-is.
+        
+        Different feature types have different optimal NaN handling strategies:
+        - Lag features: forward fill (most recent value is most relevant)
+        - Rolling stats: backward fill then forward fill (avoid future leakage)
+        - Difference/Pct: 0 (no change)
+        - Ratio/Division: median or 1.0 (avoid extremes)
+        - Technical indicators: neutral values (RSI=50, BB_position=0.5)
+        - Regime flags: 0 (not in special regime)
+        - Interaction features: 0 (safe default)
+        
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input dataframe with potential NaN values
+            
+        Returns
+        -------
+        pd.DataFrame
+            Dataframe with NaN values handled appropriately (only for engineered features)
+        """
+        df_filled = df.copy()
+        
+        # First, handle inf values in ALL columns (inf is always invalid)
+        df_filled = df_filled.replace([np.inf, -np.inf], np.nan)
+        
+        # Only process ENGINEERED features (not original features)
+        engineered_cols = [col for col in df_filled.columns if col not in self.original_features]
+        
+        nan_count_before = df_filled[engineered_cols].isna().sum().sum()
+        
+        logger.info(f"Processing NaN values for {len(engineered_cols)} engineered features only")
+        logger.info(f"Original features ({len(self.original_features)}) will preserve their NaN values")
+        
+        for col in engineered_cols:
+            if df_filled[col].isna().sum() == 0:
+                continue
+            
+            # 1. Lag features: forward fill (limit 1) then median (neutral)
+            if '_lag_' in col:
+                df_filled[col] = df_filled[col].fillna(method='ffill', limit=1)
+                # Structural missingness: fill with median (neutral) instead of 0
+                median_val = df_filled[col].median()
+                df_filled[col] = df_filled[col].fillna(median_val if pd.notna(median_val) else 0)
+            
+            # 2. Rolling statistics: min_periods=1 handled most, but for remaining:
+            elif any(x in col for x in ['_roll_mean_', '_roll_std_', '_roll_min_', '_roll_max_']):
+                # Forward fill first (short gaps)
+                df_filled[col] = df_filled[col].fillna(method='ffill', limit=5)
+                # Structural missingness (pre-existence): fill with median
+                median_val = df_filled[col].median()
+                df_filled[col] = df_filled[col].fillna(median_val if pd.notna(median_val) else 0)
+            
+            # 3. Z-score: 0 (mean) is safe
+            elif '_zscore_' in col:
+                df_filled[col] = df_filled[col].fillna(0)
+            
+            # 4. Deviation: 0 (no deviation) is safe
+            elif '_dev_' in col:
+                df_filled[col] = df_filled[col].fillna(0)
+            
+            # 5. Difference/Percent change: 0 (no change) is safe
+            elif any(x in col for x in ['_diff_', '_pct_', '_accel']):
+                df_filled[col] = df_filled[col].fillna(0)
+            
+            # 6. Ratio/Division: median
+            elif '_div_' in col:
+                median_val = df_filled[col].median()
+                df_filled[col] = df_filled[col].fillna(median_val if pd.notna(median_val) else 1.0)
+            
+            # 7. RSI: 50 (neutral)
+            elif '_rsi' in col:
+                df_filled[col] = df_filled[col].fillna(50)
+            
+            # 8. Bollinger Bands position: 0.5 (middle)
+            elif '_bb_position' in col:
+                df_filled[col] = df_filled[col].fillna(0.5)
+            
+            # 9. Bollinger Bands width: median
+            elif '_bb_width' in col:
+                median_val = df_filled[col].median()
+                df_filled[col] = df_filled[col].fillna(median_val if pd.notna(median_val) else 0)
+            
+            # 10. Bollinger Bands upper/lower: median
+            elif any(x in col for x in ['_bb_upper', '_bb_lower']):
+                median_val = df_filled[col].median()
+                df_filled[col] = df_filled[col].fillna(median_val if pd.notna(median_val) else 0)
+            
+            # 11. Momentum: 0
+            elif '_momentum_' in col:
+                df_filled[col] = df_filled[col].fillna(0)
+            
+            # 12. Regime flags: 0
+            elif any(x in col for x in ['_high_vol', '_low_vol']):
+                df_filled[col] = df_filled[col].fillna(0)
+            
+            # 13. Interaction features: 0
+            elif '_x_' in col:
+                df_filled[col] = df_filled[col].fillna(0)
+            
+            # 14. Availability flags: 0 (already handled but just in case)
+            elif '_is_available' in col:
+                df_filled[col] = df_filled[col].fillna(0)
+            
+            # 15. Others: median (safer than 0 for unknown features)
+            else:
+                median_val = df_filled[col].median()
+                df_filled[col] = df_filled[col].fillna(median_val if pd.notna(median_val) else 0)
+        
+        nan_count_after = df_filled[engineered_cols].isna().sum().sum()
+        
+        logger.info(f"NaN handling (engineered features only): {nan_count_before} → {nan_count_after} (removed {nan_count_before - nan_count_after})")
+        
+        if nan_count_after > 0:
+            logger.warning(f"Still have {nan_count_after} NaN values in engineered features after handling!")
+            nan_cols = [col for col in engineered_cols if df_filled[col].isna().any()]
+            logger.warning(f"Columns with NaN: {nan_cols[:10]}...")
+        
+        return df_filled
+    
     def fit_transform(
         self,
         df: pd.DataFrame,
@@ -478,6 +662,10 @@ class FeatureEngineering:
             # 6. Regime features
             logger.info("\n6. Creating regime features...")
             df_sorted = self.create_regime_features(df_sorted)
+            
+            # 7. Handle NaN values
+            logger.info("\n7. Handling NaN values...")
+            df_sorted = self.handle_feature_nans(df_sorted)
         
         # Track engineered features
         self.engineered_features = [
@@ -573,17 +761,24 @@ class FeatureEngineering:
         elif method == 'mutual_info':
             from sklearn.feature_selection import mutual_info_regression
             
-            # Handle NaN values
-            df_clean = df[feature_cols + [target_col]].dropna()
+            # Handle NaN values: Fill features with median, drop only if target is NaN
+            # This preserves data when features have different start dates (structural missingness)
+            df_target_clean = df[feature_cols + [target_col]].dropna(subset=[target_col])
             
-            if len(df_clean) < 100:
-                logger.warning("Too few samples after removing NaN, using correlation instead")
-                scores = df[feature_cols + [target_col]].corr()[target_col].abs()
+            if len(df_target_clean) < 100:
+                logger.warning("Too few samples, using correlation instead")
+                scores = df_target_clean[feature_cols + [target_col]].corr()[target_col].abs()
                 scores = scores[scores.index != target_col].sort_values(ascending=False)
             else:
+                # Fill feature NaNs with median
+                X = df_target_clean[feature_cols].fillna(df_target_clean[feature_cols].median())
+                # If still NaN (all NaN column), fill with 0
+                X = X.fillna(0)
+                y = df_target_clean[target_col]
+                
                 mi_scores = mutual_info_regression(
-                    df_clean[feature_cols], 
-                    df_clean[target_col],
+                    X, 
+                    y,
                     random_state=42
                 )
                 scores = pd.Series(mi_scores, index=feature_cols).sort_values(ascending=False)
@@ -698,15 +893,21 @@ class FeatureEngineering:
             elif method == 'mutual_info':
                 from sklearn.feature_selection import mutual_info_regression
                 
-                df_clean = df[feature_cols + [target_col]].dropna()
+                # Handle NaN values: Fill features with median, drop only if target is NaN
+                df_target_clean = df[feature_cols + [target_col]].dropna(subset=[target_col])
                 
-                if len(df_clean) < 100:
+                if len(df_target_clean) < 100:
                     logger.warning(f"Too few samples for {method}, skipping")
                     continue
                 
+                # Fill feature NaNs with median
+                X = df_target_clean[feature_cols].fillna(df_target_clean[feature_cols].median())
+                X = X.fillna(0)
+                y = df_target_clean[target_col]
+                
                 mi_scores = mutual_info_regression(
-                    df_clean[feature_cols], 
-                    df_clean[target_col],
+                    X, 
+                    y,
                     random_state=42
                 )
                 scores = pd.Series(mi_scores, index=feature_cols).sort_values(ascending=False)
@@ -851,15 +1052,21 @@ class FeatureEngineering:
             elif method == 'mutual_info':
                 from sklearn.feature_selection import mutual_info_regression
                 
-                df_clean = df[feature_cols + [target_col]].dropna()
+                # Handle NaN values: Fill features with median, drop only if target is NaN
+                df_target_clean = df[feature_cols + [target_col]].dropna(subset=[target_col])
                 
-                if len(df_clean) < 100:
+                if len(df_target_clean) < 100:
                     logger.warning(f"Too few samples for {method}, skipping")
                     continue
                 
+                # Fill feature NaNs with median
+                X = df_target_clean[feature_cols].fillna(df_target_clean[feature_cols].median())
+                X = X.fillna(0)
+                y = df_target_clean[target_col]
+                
                 mi_scores = mutual_info_regression(
-                    df_clean[feature_cols], 
-                    df_clean[target_col],
+                    X, 
+                    y,
                     random_state=42
                 )
                 scores = pd.Series(mi_scores, index=feature_cols)
@@ -941,6 +1148,313 @@ class FeatureEngineering:
         
         return df_selected, selected_features, score_summary
     
+class FeatureDeleter:
+    """
+    Multi-stage feature deletion with smart strategies
+    """
+    def __init__(
+        self, 
+        target_col: str = 'forward_returns',
+        variance_threshold: float = 1e-6,
+        correlation_threshold: float = 0.95,
+        vif_threshold: float = 10.0,
+        importance_percentile: int = 20
+    ):
+        self.target_col = target_col
+        self.variance_threshold = variance_threshold
+        self.correlation_threshold = correlation_threshold
+        self.vif_threshold = vif_threshold
+        self.importance_percentile = importance_percentile
+        self.deletion_log = []
+        
+    def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Execute multi-stage deletion pipeline
+        """
+        logger.info("="*80)
+        logger.info("FEATURE DELETION PIPELINE")
+        logger.info("="*80)
+        logger.info(f"Initial features: {len(df.columns) - 1}")  # -1 for target
+        
+        df_clean = df.copy()
+        
+        # Stage 1: Remove useless features
+        df_clean = self._stage1_remove_useless(df_clean)
+        
+        # Stage 2: Remove redundant features (smart correlation)
+        df_clean = self._stage2_remove_redundant(df_clean)
+        
+        # Stage 3: Remove multicollinear features (VIF)
+        df_clean = self._stage3_remove_multicollinear(df_clean)
+        
+        # Stage 4: Remove low-importance features (optional)
+        # df_clean = self._stage4_remove_low_importance(df_clean)
+        
+        logger.info(f"\n{'='*80}")
+        logger.info(f"DELETION SUMMARY")
+        logger.info(f"{'='*80}")
+        logger.info(f"Final features: {len(df_clean.columns) - 1}")
+        logger.info(f"Deleted: {len(df.columns) - len(df_clean.columns)} features")
+        
+        # Print deletion log
+        self._print_deletion_log()
+        
+        return df_clean
+    
+    def _stage1_remove_useless(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Stage 1: Remove obviously useless features
+        - Zero variance
+        - Near-zero variance
+        - Too many missing values
+        - Constant values
+        """
+        logger.info(f"\n{'='*40}")
+        logger.info("Stage 1: Remove Useless Features")
+        logger.info(f"{'='*40}")
+        
+        feature_cols = [col for col in df.columns if col != self.target_col]
+        to_drop = []
+        
+        for col in feature_cols:
+            reasons = []
+            
+            # 1. Zero variance
+            if df[col].var() == 0:
+                reasons.append("zero variance")
+            
+            # 2. Near-zero variance
+            # Financial data (returns) can be very small, so use a safe threshold
+            elif df[col].var() < self.variance_threshold:
+                reasons.append(f"near-zero variance ({df[col].var():.2e} < {self.variance_threshold})")
+            
+            # 3. Too many missing (>50%)
+            missing_pct = df[col].isnull().sum() / len(df) * 100
+            if missing_pct > 50:
+                reasons.append(f"too many missing ({missing_pct:.1f}%)")
+            
+            # 4. Too many identical values (>95%)
+            if len(df[col].dropna()) > 0:
+                most_common_pct = df[col].value_counts().iloc[0] / len(df) * 100
+                if most_common_pct > 95:
+                    reasons.append(f"constant-like ({most_common_pct:.1f}% same value)")
+            
+            # 5. All NaN
+            if df[col].isnull().all():
+                reasons.append("all NaN")
+            
+            if reasons:
+                to_drop.append(col)
+                self.deletion_log.append({
+                    'stage': 1,
+                    'feature': col,
+                    'reason': ', '.join(reasons)
+                })
+        
+        logger.info(f"Removing {len(to_drop)} useless features:")
+        for col in to_drop[:10]:  # Show first 10
+            logger.info(f"  - {col}")
+        if len(to_drop) > 10:
+            logger.info(f"  ... and {len(to_drop) - 10} more")
+        
+        return df.drop(columns=to_drop)
+    
+    def _stage2_remove_redundant(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Stage 2: Remove redundant features (smart correlation-based)
+        - Consider target correlation when choosing which to keep
+        - Keep the feature more correlated with target
+        """
+        logger.info(f"\n{'='*40}")
+        logger.info("Stage 2: Remove Redundant Features")
+        logger.info(f"{'='*40}")
+        
+        feature_cols = [col for col in df.columns if col != self.target_col]
+        
+        # Calculate correlation matrix
+        corr_matrix = df[feature_cols + [self.target_col]].corr()
+        feature_corr = corr_matrix.loc[feature_cols, feature_cols].abs()
+        target_corr = corr_matrix[self.target_col].abs()
+        
+        # Find pairs with high correlation
+        to_drop = set()
+        threshold = self.correlation_threshold
+        
+        for i in range(len(feature_cols)):
+            if feature_cols[i] in to_drop:
+                continue
+            
+            for j in range(i+1, len(feature_cols)):
+                if feature_cols[j] in to_drop:
+                    continue
+                
+                col_i = feature_cols[i]
+                col_j = feature_cols[j]
+                
+                # Check if highly correlated
+                if feature_corr.loc[col_i, col_j] > threshold:
+                    # Keep the one more correlated with target
+                    if target_corr[col_i] >= target_corr[col_j]:
+                        to_drop.add(col_j)
+                        reason = f"corr with {col_i}: {feature_corr.loc[col_i, col_j]:.3f}, " \
+                                f"target_corr: {target_corr[col_j]:.3f} < {target_corr[col_i]:.3f}"
+                    else:
+                        to_drop.add(col_i)
+                        reason = f"corr with {col_j}: {feature_corr.loc[col_i, col_j]:.3f}, " \
+                                f"target_corr: {target_corr[col_i]:.3f} < {target_corr[col_j]:.3f}"
+                    
+                    self.deletion_log.append({
+                        'stage': 2,
+                        'feature': list(to_drop)[-1],
+                        'reason': reason
+                    })
+        
+        logger.info(f"Removing {len(to_drop)} redundant features (correlation > {threshold})")
+        
+        return df.drop(columns=list(to_drop))
+    
+    def _stage3_remove_multicollinear(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Stage 3: Remove multicollinear features using VIF
+        - VIF (Variance Inflation Factor) > 10 indicates high multicollinearity
+        - Iteratively remove highest VIF until all < threshold
+        """
+        logger.info(f"\n{'='*40}")
+        logger.info("Stage 3: Remove Multicollinear Features (VIF)")
+        logger.info(f"{'='*40}")
+        
+        from statsmodels.stats.outliers_influence import variance_inflation_factor
+        
+        feature_cols = [col for col in df.columns if col != self.target_col]
+        df_features = df[feature_cols].fillna(df[feature_cols].median())
+        
+        # Add constant for VIF calculation
+        from statsmodels.tools.tools import add_constant
+        df_with_const = add_constant(df_features)
+        
+        vif_threshold = self.vif_threshold
+        to_drop = []
+        iteration = 0
+        max_iterations = 50  # Prevent infinite loop
+        
+        # Optimization: Skip VIF if too many features (too slow)
+        if len(df_with_const.columns) > 50:
+            logger.info(f"  ⚠️  Skipping VIF calculation: too many features ({len(df_with_const.columns)} > 50)")
+            logger.info("      Use correlation filtering (Stage 2) with stricter threshold instead.")
+            return df
+        
+        while iteration < max_iterations:
+            iteration += 1
+            
+            # Calculate VIF for all features
+            vif_data = pd.DataFrame()
+            vif_data["feature"] = df_with_const.columns[1:]  # Skip constant
+            vif_data["VIF"] = [
+                variance_inflation_factor(df_with_const.values, i+1)  # +1 to skip constant
+                for i in range(len(df_with_const.columns)-1)
+            ]
+            
+            # Find max VIF
+            max_vif = vif_data["VIF"].max()
+            
+            if max_vif < vif_threshold:
+                logger.info(f"  ✓ All VIF < {vif_threshold} after {iteration} iterations")
+                break
+            
+            # Remove feature with highest VIF
+            feature_to_remove = vif_data.loc[vif_data["VIF"].idxmax(), "feature"]
+            
+            logger.info(f"  Iteration {iteration}: Removing {feature_to_remove} (VIF={max_vif:.2f})")
+            
+            to_drop.append(feature_to_remove)
+            self.deletion_log.append({
+                'stage': 3,
+                'feature': feature_to_remove,
+                'reason': f"VIF={max_vif:.2f} > {vif_threshold}"
+            })
+            
+            # Remove from dataframe
+            df_with_const = df_with_const.drop(columns=[feature_to_remove])
+        
+        if iteration >= max_iterations:
+            logger.warning(f"  ⚠️  Reached max iterations ({max_iterations})")
+        
+        logger.info(f"Removed {len(to_drop)} multicollinear features")
+        
+        return df.drop(columns=to_drop)
+    
+    def _stage4_remove_low_importance(
+        self, 
+        df: pd.DataFrame
+    ) -> pd.DataFrame:
+        """
+        Stage 4: Remove low-importance features (optional, model-based)
+        - Train a quick model to get feature importance
+        - Remove bottom X percentile
+        """
+        logger.info(f"\n{'='*40}")
+        logger.info("Stage 4: Remove Low-Importance Features")
+        logger.info(f"{'='*40}")
+        
+        from sklearn.ensemble import RandomForestRegressor
+        
+        feature_cols = [col for col in df.columns if col != self.target_col]
+        X = df[feature_cols].fillna(df[feature_cols].median())
+        y = df[self.target_col].dropna()
+        
+        # Align X and y
+        mask = df[self.target_col].notna()
+        X = X[mask]
+        
+        # Quick model for importance
+        # IMPORTANT: Use only past data to avoid look-ahead bias
+        train_size = int(len(X) * 0.8)
+        X_train = X.iloc[:train_size]
+        y_train = y.iloc[:train_size]
+        
+        logger.info(f"  Training on first {train_size} samples (80%) to avoid look-ahead bias")
+        
+        model = RandomForestRegressor(
+            n_estimators=100,
+            max_depth=5,
+            random_state=42,
+            n_jobs=-1
+        )
+        model.fit(X_train, y_train)
+        
+        # Get importance
+        importance = pd.Series(model.feature_importances_, index=feature_cols)
+        threshold_val = np.percentile(importance, self.importance_percentile)
+        
+        to_drop = importance[importance < threshold_val].index.tolist()
+        
+        logger.info(f"Removing {len(to_drop)} low-importance features "
+                   f"(bottom {self.importance_percentile}%)")
+        logger.info(f"Importance threshold: {threshold_val:.6f}")
+        
+        for col in to_drop:
+            self.deletion_log.append({
+                'stage': 4,
+                'feature': col,
+                'reason': f"low importance ({importance[col]:.6f} < {threshold_val:.6f})"
+            })
+        
+        return df.drop(columns=to_drop)
+    
+    def _print_deletion_log(self):
+        """
+        Print deletion log by stage
+        """
+        logger.info(f"\nDeletion Log by Stage:")
+        for stage in [1, 2, 3, 4]:
+            stage_deletions = [log for log in self.deletion_log if log['stage'] == stage]
+            if stage_deletions:
+                logger.info(f"\n  Stage {stage}: {len(stage_deletions)} features")
+                for log in stage_deletions[:5]:  # Show first 5
+                    logger.info(f"    - {log['feature']}: {log['reason']}")
+                if len(stage_deletions) > 5:
+                    logger.info(f"    ... and {len(stage_deletions) - 5} more")
+
     def remove_correlated_features(
         self,
         df: pd.DataFrame,
@@ -988,7 +1502,7 @@ class FeatureEngineering:
         
         # 타깃과 feature간 상관 미리 계산 (고비용 반복 방지)
         target_corr = None
-        if target_col is not None:
+        if target_col is not None and target_col in df.columns:
             target_corr = df[feature_cols + [target_col]].corr()[target_col].abs()
 
         # Features to remove

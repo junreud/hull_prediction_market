@@ -5,7 +5,7 @@
 echo "📦 Creating Kaggle Dataset ZIP..."
 
 # ZIP 파일명
-ZIP_FILE="mydata.zip"
+ZIP_FILE="mydata2.zip"
 
 # 기존 ZIP 파일 삭제
 if [ -f "$ZIP_FILE" ]; then
@@ -20,6 +20,8 @@ zip -r "$ZIP_FILE" \
     scripts/optimize_return_model.py \
     scripts/optimize_risk_model.py \
     scripts/optimize_position_strategy.py \
+    scripts/optimize_ensemble.py \
+    scripts/evaluate_cv_strategies.py \
     conf/params.yaml \
     -x "*.pyc" \
     -x "*__pycache__/*" \

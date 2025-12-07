@@ -14,36 +14,40 @@ import numpy as np
 import yaml
 
 
-# Global logger instance - initialized once
-_logger_initialized = False
-_global_logger = None
+# Global shared logger instance
+_SHARED_LOGGER = None
+_SHARED_LOG_FILE = None
 
 
 def get_logger(
     log_file: Optional[str] = None,
     level: str = "INFO",
-    format_str: Optional[str] = None
+    format_str: Optional[str] = None,
+    name: Optional[str] = None
 ) -> logging.Logger:
     """
-    Get or create the global logger instance.
+    Get or create a shared logger instance.
     
-    This ensures only one logger is created and prevents duplicate handlers.
+    All modules use the same logger to consolidate logs into one file.
+    The first call sets the log file, and subsequent calls reuse it.
     
     Args:
-        log_file: Path to log file (optional, only used on first call)
-        level: Logging level (only used on first call)
-        format_str: Custom format string (optional, only used on first call)
+        log_file: Path to log file (optional, uses first caller's value)
+        level: Logging level
+        format_str: Custom format string (optional)
+        name: Logger name (ignored, uses shared logger)
         
     Returns:
-        Configured logger instance
+        Shared logger instance
     """
-    global _logger_initialized, _global_logger
+    global _SHARED_LOGGER, _SHARED_LOG_FILE
     
-    if not _logger_initialized:
-        _global_logger = setup_logging(log_file, level, format_str)
-        _logger_initialized = True
+    # If logger doesn't exist yet, create it
+    if _SHARED_LOGGER is None:
+        _SHARED_LOG_FILE = log_file or 'logs/app.log'
+        _SHARED_LOGGER = setup_logging(_SHARED_LOG_FILE, level, format_str, logger_name='shared_logger')
     
-    return _global_logger
+    return _SHARED_LOGGER
 
 
 def set_seed(seed: int = 42) -> None:
@@ -87,7 +91,8 @@ def load_config(config_path: str = "conf/params.yaml") -> dict:
 def setup_logging(
     log_file: Optional[str] = None,
     level: str = "INFO",
-    format_str: Optional[str] = None
+    format_str: Optional[str] = None,
+    logger_name: str = 'prediction_market'
 ) -> logging.Logger:
     """
     Setup logging configuration.
@@ -96,6 +101,7 @@ def setup_logging(
         log_file: Path to log file (optional)
         level: Logging level ('DEBUG', 'INFO', 'WARNING', 'ERROR')
         format_str: Custom format string (optional)
+        logger_name: Name for the logger
         
     Returns:
         Configured logger
@@ -104,10 +110,10 @@ def setup_logging(
         format_str = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     
     # Create logger
-    logger = logging.getLogger('prediction_market')
+    logger = logging.getLogger(logger_name)
     logger.setLevel(getattr(logging, level.upper()))
     
-    # Remove existing handlers
+    # Remove existing handlers to avoid duplicates
     logger.handlers = []
     
     # Console handler
@@ -119,14 +125,18 @@ def setup_logging(
     
     # File handler (if specified)
     if log_file:
+        # Create log directory if it doesn't exist
         log_path = Path(log_file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         
-        file_handler = logging.FileHandler(log_file)
+        file_handler = logging.FileHandler(log_file, mode='a')
         file_handler.setLevel(getattr(logging, level.upper()))
         file_formatter = logging.Formatter(format_str)
         file_handler.setFormatter(file_formatter)
         logger.addHandler(file_handler)
+    
+    # Prevent propagation to avoid duplicate logs
+    logger.propagate = False
     
     return logger
 

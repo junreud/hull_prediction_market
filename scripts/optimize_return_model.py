@@ -16,20 +16,10 @@ Usage:
 
 import sys
 from pathlib import Path
-
-# ========== DEBUG: Print current state ==========
-print("="*80)
-print("SCRIPT PATH SETUP - DEBUG INFO")
-print("="*80)
-print(f"__file__ = {__file__}")
-print(f"sys.path BEFORE modification:")
 for p in sys.path[:5]:
     print(f"  - {p}")
-
 # Add project root to Python path (Kaggle and Local compatible)
 project_root = Path(__file__).parent.parent
-print(f"\nproject_root = {project_root}")
-print(f"project_root exists? {project_root.exists()}")
 
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
@@ -51,11 +41,6 @@ for kaggle_path in kaggle_dataset_paths:
             sys.path.insert(0, str(kaggle_path))
             print(f"  ✓ Added {kaggle_path} to sys.path")
         break
-
-print(f"\nsys.path AFTER modification:")
-for p in sys.path[:5]:
-    print(f"  - {p}")
-
 # Check if src module is findable
 src_path = Path(sys.path[0]) / "src"
 print(f"\nLooking for src at: {src_path}")
@@ -65,9 +50,6 @@ if src_path.exists():
     for item in src_path.iterdir():
         if item.suffix == '.py':
             print(f"  - {item.name}")
-
-print("="*80)
-print()
 
 import numpy as np
 import pandas as pd
@@ -162,7 +144,7 @@ class ReturnModelOptimizer:
                 normalize_method='rank_gauss',
                 scale=scale,
                 scale_method='robust',
-                window=60
+                window=60,
             )
             
             logger.info(f"✓ Preprocessing complete: {train_processed.shape}")
@@ -178,8 +160,9 @@ class ReturnModelOptimizer:
     def step2_feature_engineering(
         self,
         df: pd.DataFrame,
-        add_time_features: bool = True,
-        add_regime_features: bool = True
+        fit_transform: bool = True,
+        # add_time_features: bool = True,
+        # add_regime_features: bool = True
     ) -> pd.DataFrame:
         """
         Step 2: Feature engineering.
@@ -204,22 +187,24 @@ class ReturnModelOptimizer:
         
         with Timer("Feature Engineering", logger):
             df_engineered = df.copy()
+            if not fit_transform:
+                breakpoint()
+            elif fit_transform:
+                # Standard feature engineering
+                logger.info("\n2.3 Creating engineered features...")
+                df_engineered = self.feature_engineer.fit_transform(df_engineered)
             
-            # Standard feature engineering
-            logger.info("\n2.3 Creating engineered features...")
-            df_engineered = self.feature_engineer.fit_transform(df_engineered)
-            
-            logger.info(f"\n✓ Feature engineering complete")
-            logger.info(f"  Original features: {len(self.feature_engineer.original_features)}")
-            logger.info(f"  Engineered features: {len(self.feature_engineer.engineered_features)}")
-            logger.info(f"  Total features: {df_engineered.shape[1] - 2}")
-            
-            # Store results
-            self.results['feature_engineering'] = {
-                'original_features': len(self.feature_engineer.original_features),
-                'engineered_features': len(self.feature_engineer.engineered_features),
-                'total_features': df_engineered.shape[1] - 2,
-            }
+                logger.info(f"\n✓ Feature engineering complete")
+                logger.info(f"  Original features: {len(self.feature_engineer.original_features)}")
+                logger.info(f"  Engineered features: {len(self.feature_engineer.engineered_features)}")
+                logger.info(f"  Total features: {df_engineered.shape[1] - 2}")
+                
+                # Store results
+                self.results['feature_engineering'] = {
+                    'original_features': len(self.feature_engineer.original_features),
+                    'engineered_features': len(self.feature_engineer.engineered_features),
+                    'total_features': df_engineered.shape[1] - 2,
+                }
             
             return df_engineered
     
@@ -307,9 +292,12 @@ class ReturnModelOptimizer:
         self,
         df: pd.DataFrame,
         feature_cols: List[str],
+        enable_tuning: bool = True,
         n_trials: int = 50,
         timeout: Optional[int] = None,
-        objective_type: str = 'combined'
+        objective_type: str = 'combined',
+        model_type: str = 'lightgbm',
+        n_jobs: int = 1
     ) -> Dict:
         """
         Step 4: Hyperparameter tuning with Optuna.
@@ -330,6 +318,10 @@ class ReturnModelOptimizer:
             - 'ic': Maximize Information Coefficient
             - 'spread': Maximize Long-Short Spread
             - 'combined': Maximize IC + Spread (RECOMMENDED)
+        model_type : str
+            Model type: 'lightgbm' or 'catboost'
+        n_jobs : int
+            Number of parallel jobs (default: 1)
             
         Returns
         -------
@@ -340,70 +332,80 @@ class ReturnModelOptimizer:
         logger.info("STEP 4: HYPERPARAMETER TUNING")
         logger.info("="*80)
         
-        with Timer("Hyperparameter Tuning", logger):
-            # Create tuner
-            tuner = OptunaLightGBMTuner(
-                config_path=self.config_path,
-                config_section='tuning',
-                n_trials=n_trials,
-                timeout=timeout,
-                n_jobs=1,
-                random_state=42,
-                objective_type=objective_type  # ← New parameter
-            )
-            
-            # Run optimization
-            logger.info(f"\n4.1 Running Optuna optimization ({n_trials} trials)...")
-            best_params = tuner.optimize(
-                df=df,
-                feature_cols=feature_cols,
-                target_col='forward_returns',
-                study_name='return_lgbm_tuning'
-            )
-            
-            # Get best score from tuner
-            best_score = tuner.best_score
-            
-            logger.info(f"\n✓ Hyperparameter tuning complete")
-            
-            # Log objective-specific results
-            if objective_type == 'combined' and hasattr(tuner.study.best_trial, 'user_attrs'):
-                ic = tuner.study.best_trial.user_attrs.get('ic', None)
-                spread = tuner.study.best_trial.user_attrs.get('spread', None)
-                if ic is not None and spread is not None:
-                    actual_score = -best_score  # Negate back to get actual score
-                    logger.info(f"\n📊 Optimization Results:")
-                    logger.info(f"  Combined Score: {actual_score:.6f}")
-                    logger.info(f"  → IC: {ic:.6f}")
-                    logger.info(f"  → Spread: {spread:.6f} ({spread*100:.4f}%)")
-                    logger.info(f"  (Note: Best score is negated for Optuna minimization)")
-            elif objective_type == 'ic':
-                logger.info(f"  Best IC: {-best_score:.6f}")
-            elif objective_type == 'spread':
-                logger.info(f"  Best Spread: {-best_score:.6f} ({-best_score*100:.4f}%)")
-            
-            # Store results
-            self.results['hyperparameter_tuning'] = {
-                'n_trials': n_trials,
-                'best_score': best_score,
-                'actual_score': -best_score if objective_type != 'rmse' else best_score,
-                'objective_type': objective_type,
-                'best_params': best_params
-            }
-            
-            # Save best parameters
-            output_dir = Path("artifacts")
-            output_dir.mkdir(parents=True, exist_ok=True)
-            with open(output_dir / 'lightgbm_best_params_optimized.json', 'w') as f:
-                json.dump(best_params, f, indent=2)
-            
+        if enable_tuning:
+            with Timer("Hyperparameter Tuning", logger):
+                # Create tuner
+                tuner = OptunaLightGBMTuner(
+                    config_path=self.config_path,
+                    config_section='tuning',
+                    n_trials=n_trials,
+                    timeout=timeout,
+                    n_jobs=n_jobs,
+                    random_state=42,
+                    objective_type=objective_type,
+                    model_type=model_type
+                )
+                
+                # Run optimization
+                logger.info(f"\n4.1 Running Optuna optimization ({n_trials} trials)...")
+                best_params = tuner.optimize(
+                    df=df,
+                    feature_cols=feature_cols,
+                    target_col='forward_returns',
+                    study_name='return_lgbm_tuning'
+                )
+                
+                # Get best score from tuner
+                best_score = tuner.best_score
+                
+                logger.info(f"\n✓ Hyperparameter tuning complete")
+                
+                # Log objective-specific results
+                if objective_type == 'combined' and hasattr(tuner.study.best_trial, 'user_attrs'):
+                    ic = tuner.study.best_trial.user_attrs.get('ic', None)
+                    spread = tuner.study.best_trial.user_attrs.get('spread', None)
+                    if ic is not None and spread is not None:
+                        actual_score = -best_score  # Negate back to get actual score
+                        logger.info(f"\n📊 Optimization Results:")
+                        logger.info(f"  Combined Score: {actual_score:.6f}")
+                        logger.info(f"  → IC: {ic:.6f}")
+                        logger.info(f"  → Spread: {spread:.6f} ({spread*100:.4f}%)")
+                        logger.info(f"  (Note: Best score is negated for Optuna minimization)")
+                elif objective_type == 'ic':
+                    logger.info(f"  Best IC: {-best_score:.6f}")
+                elif objective_type == 'spread':
+                    logger.info(f"  Best Spread: {-best_score:.6f} ({-best_score*100:.4f}%)")
+                
+                # Store results
+                self.results['hyperparameter_tuning'] = {
+                    'n_trials': n_trials,
+                    'best_score': best_score,
+                    'actual_score': -best_score if objective_type != 'rmse' else best_score,
+                    'objective_type': objective_type,
+                    'best_params': best_params
+                }
+                
+                # Save best parameters
+                output_dir = Path("artifacts")
+                output_dir.mkdir(parents=True, exist_ok=True)
+                with open(output_dir / 'lightgbm_best_params_optimized.json', 'w') as f:
+                    json.dump(best_params, f, indent=2)
+
+                return best_params    
+        else:
+            logger.info("\n⏭️  Hyperparameter tuning disabled, skipping Step 4")
+            # Load existing best params
+            with open("artifacts/lightgbm_best_params_optimized.json", 'r') as f:
+                best_params = json.load(f)
+            logger.info(f"✓ Loaded existing best parameters")
             return best_params
-    
+        
     def step5_train_final_model(
         self,
         df: pd.DataFrame,
         feature_cols: List[str],
-        best_params: Dict
+        best_params: Dict,
+        model_type: str = 'lightgbm'
     ) -> Tuple[ReturnPredictor, np.ndarray, float]:
         """
         Step 5: Train final model with best parameters.
@@ -416,6 +418,8 @@ class ReturnModelOptimizer:
             Feature column names
         best_params : Dict
             Best hyperparameters from tuning
+        model_type : str
+            Model type: 'lightgbm' or 'catboost' (must match step 4)
             
         Returns
         -------
@@ -429,7 +433,7 @@ class ReturnModelOptimizer:
         with Timer("Final Model Training", logger):
             # Create predictor with best params
             predictor = ReturnPredictor(
-                model_type='lightgbm',
+                model_type=model_type,  # ← Use same model_type as step 4
                 config_path=self.config_path
             )
             
@@ -810,17 +814,18 @@ class ReturnModelOptimizer:
         
         if 'final_model' in self.results:
             logger.info(f"\nFinal Model:")
-            logger.info(f"  OOF Score (RMSE): {self.results['final_model']['oof_score']:.6f}")
             logger.info(f"  Folds: {self.results['final_model']['n_folds']}")
+            logger.info(f"OOF Score (RMSE): {self.results['final_model']['oof_score']:.6f}")
+            
             
             # Return Model Metrics
             if 'return_model_metrics' in self.results['final_model']:
                 metrics = self.results['final_model']['return_model_metrics']
-                logger.info(f"\n  📊 Return Model Performance:")
-                logger.info(f"    Directional Accuracy: {metrics['directional_accuracy']:.2%}")
-                logger.info(f"    Information Coefficient: {metrics['information_coefficient']:.4f}")
-                logger.info(f"    Correlation: {metrics['correlation']:.4f}")
-                logger.info(f"    Long-Short Spread: {metrics['long_short_spread']:.4%}")
+                # logger.info(f"\n  📊 Return Model Performance:")
+                # logger.info(f"    Directional Accuracy: {metrics['directional_accuracy']:.2%}")
+                logger.info(f"Information Coefficient: {metrics['information_coefficient']:.4f}")
+                # logger.info(f"    Correlation: {metrics['correlation']:.4f}")
+                logger.info(f"Long-Short Spread: {metrics['long_short_spread']:.4%}")
         
         if 'interpretation' in self.results:
             logger.info(f"\nTop 10 Most Important Features:")
@@ -834,6 +839,7 @@ class ReturnModelOptimizer:
         normalize: bool = True,
         scale: bool = True,
         # Step 2: Feature Engineering
+        fit_transform: bool = True,
         add_time_features: bool = True,
         add_regime_features: bool = True,
         # Step 3: Feature Selection
@@ -842,9 +848,12 @@ class ReturnModelOptimizer:
         remove_correlated: bool = True,
         corr_threshold: float = 0.95,
         # Step 4: Hyperparameter Tuning
+        enable_tuning: bool = True,
         n_trials: int = 50,
         timeout: Optional[int] = None,
-        objective_type: str = 'combined',  # ← New parameter
+        objective_type: str = 'combined',
+        model_type: str = 'lightgbm',
+        n_jobs: int = 5,
         # Step 5: Final Model Training
         # Step 5.5: Ensemble Models (optional)
         enable_ensemble: bool = False,
@@ -879,8 +888,9 @@ class ReturnModelOptimizer:
         # Step 2: Feature engineering
         train_engineered = self.step2_feature_engineering(
             train_df,
-            add_time_features=add_time_features,
-            add_regime_features=add_regime_features
+            fit_transform=fit_transform,
+            # add_time_features=add_time_features,
+            # add_regime_features=add_regime_features
         )
         
         # Step 3: Feature selection
@@ -896,16 +906,20 @@ class ReturnModelOptimizer:
         best_params = self.step4_hyperparameter_tuning(
             train_selected,
             selected_features,
+            enable_tuning=enable_tuning,
             n_trials=n_trials,
             timeout=timeout,
-            objective_type=objective_type  # ← Pass new parameter
+            objective_type=objective_type,
+            model_type=model_type,
+            n_jobs=n_jobs
         )
         
         # Step 5: Train final model
         predictor, oof_preds, oof_score = self.step5_train_final_model(
             train_selected,
             selected_features,
-            best_params
+            best_params,
+            model_type=model_type  # ← Use same model_type as step 4
         )
         
         # Step 5.5: Ensemble Models (optional)
@@ -954,17 +968,21 @@ def main():
         normalize=True,
         scale=True,
         # Feature Engineering (new features)
-        add_time_features=True,
-        add_regime_features=True,
+        fit_transform=True,
+        # add_time_features=True,
+        # add_regime_features=True,
         # Feature Selection
-        selection_method='correlation',  # or 'mutual_info'
-        top_n_features=200,
+        selection_method='correlation',  # or 'mutual_info' or 'variance'
+        top_n_features=100,
         remove_correlated=True,
         corr_threshold=0.95,
         # Hyperparameter Tuning
+        enable_tuning=True,
         n_trials=50,  # ⬆️ Increased from 1 to 50 for proper optimization
         timeout=None,  # Or set time limit in seconds (e.g., 3600 for 1 hour)
         objective_type='combined',  # 'rmse', 'ic', 'spread', or 'combined' (RECOMMENDED)
+        model_type='lightgbm',  # 'lightgbm' or 'catboost' step5 에서 같이 맞춰줄것
+        n_jobs=5,  # Number of parallel jobs (1=sequential, -1=all CPUs)
         # Ensemble Control
         enable_ensemble=False,
         n_ensemble_models=3,

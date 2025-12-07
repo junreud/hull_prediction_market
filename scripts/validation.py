@@ -4,11 +4,8 @@ import pandas.api.types
 
 MIN_INVESTMENT = 0
 MAX_INVESTMENT = 2
-
-
 class ParticipantVisibleError(Exception):
     pass
-
 
 def score(solution: pd.DataFrame, submission: pd.DataFrame, row_id_column_name: str) -> float:
     """
@@ -20,7 +17,6 @@ def score(solution: pd.DataFrame, submission: pd.DataFrame, row_id_column_name: 
     Returns:
         float: The calculated adjusted Sharpe ratio.
     """
-
     if not pandas.api.types.is_numeric_dtype(submission['prediction']):
         raise ParticipantVisibleError('Predictions must be numeric')
 
@@ -62,10 +58,7 @@ def score(solution: pd.DataFrame, submission: pd.DataFrame, row_id_column_name: 
     vol_penalty = 1 + excess_vol
 
     # Calculate the return penalty
-    return_gap = max(
-        0,
-        (market_mean_excess_return - strategy_mean_excess_return) * 100 * trading_days_per_yr,
-    )
+    return_gap = max(0, (market_mean_excess_return - strategy_mean_excess_return) * 100 * trading_days_per_yr,)
     return_penalty = 1 + (return_gap**2) / 100
 
     # Adjust the Sharpe ratio by the volatility and return penalty

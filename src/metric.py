@@ -56,73 +56,6 @@ class CompetitionMetric:
         self.min_periods = min_periods
         self.eps = eps
         
-    def calculate_volatility_penalty(
-        self,
-        strategy_vol: float,
-        market_vol: float
-    ) -> float:
-        """
-        Calculate volatility penalty.
-        
-        vol_penalty = 1 + max(0, (strategy_vol / market_vol) - threshold)
-        
-        Parameters
-        ----------
-        strategy_vol : float
-            Strategy volatility (std of strategy returns)
-        market_vol : float
-            Market volatility (std of market returns)
-        Returns
-        -------
-        float
-            Volatility penalty factor (≥ 1.0)
-        """
-        if market_vol < self.eps:
-            logger.warning("Market volatility near zero, setting penalty to 1.0")
-            return 1.0
-        
-        vol_ratio = strategy_vol / (market_vol + self.eps)
-        penalty = 1.0 + max(0.0, vol_ratio - self.vol_threshold)
-        
-        return penalty
-    
-    def calculate_return_penalty(
-        self,
-        strategy_mean_excess_return: float,
-        market_mean_excess_return: float,
-        trading_days_per_yr: int = 252
-    ) -> float:
-        """
-        Calculate return penalty (as per validation.py).
-        
-        return_penalty = 1 + (return_gap^2) / 100
-        where return_gap = max(0, (market_return - strategy_return) * 252 * 100)
-        
-        Parameters
-        ----------
-        strategy_mean_excess_return : float
-            Strategy mean excess return (daily)
-        market_mean_excess_return : float
-            Market mean excess return (daily)
-        trading_days_per_yr : int
-            Number of trading days per year (default: 252)
-            
-        Returns
-        -------
-        float
-            Return penalty factor (≥ 1.0)
-        """
-        # Calculate return gap (matching Kaggle's validation.py - note: order is intentional)
-        # Kaggle uses: * 100 * 252 (not * 252 * 100)
-        return_gap = max(
-            0.0,
-            (market_mean_excess_return - strategy_mean_excess_return) * 100 * trading_days_per_yr
-        )
-        
-        # Apply quadratic penalty
-        penalty = 1.0 + (return_gap ** 2) / 100
-        
-        return penalty
     
     def calculate_score(
         self,
@@ -240,16 +173,21 @@ class CompetitionMetric:
         else:
             sharpe = strategy_mean_excess_return / strategy_std  # Removed annualization to match LB scale
         
-        # Calculate volatility penalty
-        vol_penalty = self.calculate_volatility_penalty(strategy_vol, market_vol)
-        
-        # Calculate return penalty (if enabled)
+        # Calculate volatility penalty (직접 구현)
+        if market_vol < self.eps:
+            logger.warning("Market volatility near zero, setting penalty to 1.0")
+            vol_penalty = 1.0
+        else:
+            vol_ratio_tmp = strategy_vol / (market_vol + self.eps)
+            vol_penalty = 1.0 + max(0.0, vol_ratio_tmp - self.vol_threshold)
+
+        # Calculate return penalty (직접 구현)
         if self.use_return_penalty:
-            return_penalty = self.calculate_return_penalty(
-                strategy_mean_excess_return,
-                market_mean_excess_return,
-                trading_days_per_yr
+            return_gap_tmp = max(
+                0.0,
+                (market_mean_excess_return - strategy_mean_excess_return) * 100 * trading_days_per_yr
             )
+            return_penalty = 1.0 + (return_gap_tmp ** 2) / 100
         else:
             return_penalty = 1.0
         
@@ -294,133 +232,6 @@ class CompetitionMetric:
             'n_valid': int(len(allocations_clean))
         }
     
-    def calculate_rolling_metrics(
-        self,
-        allocations: np.ndarray,
-        forward_returns: np.ndarray,
-        window: int = 252,
-        market_returns: Optional[np.ndarray] = None,
-        risk_free_rate: Optional[np.ndarray] = None
-    ) -> pd.DataFrame:
-        """
-        Calculate rolling window metrics.
-        
-        Parameters
-        ----------
-        allocations : np.ndarray
-            Strategy allocations
-        forward_returns : np.ndarray
-            Forward returns
-        window : int
-            Rolling window size (default: 252 trading days ≈ 1 year)
-        market_returns : np.ndarray, optional
-            Market returns
-        risk_free_rate : np.ndarray, optional
-            Risk-free rate
-            
-        Returns
-        -------
-        pd.DataFrame
-            DataFrame with rolling metrics
-        """
-        n = len(allocations)
-        if n < window:
-            logger.warning(f"Data length {n} < window {window}, returning empty DataFrame")
-            return pd.DataFrame()
-        
-        strategy_returns = allocations * forward_returns
-        if market_returns is None:
-            market_returns = forward_returns
-        
-        results = []
-        
-        for i in range(window, n + 1):
-            window_slice = slice(i - window, i)
-            
-            metrics = self.calculate_score(
-                allocations[window_slice],
-                forward_returns[window_slice],
-                market_returns[window_slice],
-                risk_free_rate[window_slice] if risk_free_rate is not None else None
-            )
-            metrics['period_end'] = i
-            results.append(metrics)
-        
-        return pd.DataFrame(results)
-
-
-def calculate_additional_metrics(
-    allocations: np.ndarray,
-    forward_returns: np.ndarray,
-    market_returns: Optional[np.ndarray] = None
-) -> Dict[str, float]:
-    """
-    Calculate additional performance metrics.
-    
-    Parameters
-    ----------
-    allocations : np.ndarray
-        Strategy allocations
-    forward_returns : np.ndarray
-        Forward returns
-    market_returns : np.ndarray, optional
-        Market returns for comparison
-        
-    Returns
-    -------
-    dict
-        Additional metrics including:
-        - max_drawdown: Maximum drawdown
-        - calmar_ratio: Return / max drawdown
-        - turnover: Average daily position change
-        - leverage_2x_rate: Fraction of days with 2x leverage
-        - avg_allocation: Average allocation
-    """
-    # Remove NaN values
-    valid_mask = ~(np.isnan(allocations) | np.isnan(forward_returns))
-    allocations_clean = allocations[valid_mask]
-    forward_returns_clean = forward_returns[valid_mask]
-    
-    if len(allocations_clean) == 0:
-        return {
-            'max_drawdown': 0.0,
-            'calmar_ratio': 0.0,
-            'turnover': 0.0,
-            'leverage_2x_rate': 0.0,
-            'avg_allocation': 0.0
-        }
-    
-    # Calculate cumulative returns
-    strategy_returns = allocations_clean * forward_returns_clean
-    cumulative = np.cumprod(1 + strategy_returns) - 1
-    
-    # Maximum drawdown
-    running_max = np.maximum.accumulate(cumulative)
-    drawdown = (cumulative - running_max) / (1 + running_max)
-    max_drawdown = np.min(drawdown)
-    
-    # Calmar ratio
-    mean_return = np.mean(strategy_returns)
-    calmar_ratio = mean_return / abs(max_drawdown) if abs(max_drawdown) > 1e-10 else 0.0
-    
-    # Turnover (average daily allocation change)
-    turnover = np.mean(np.abs(np.diff(allocations_clean)))
-    
-    # 2x leverage usage rate
-    leverage_2x_rate = np.mean(allocations_clean >= 1.9)  # Consider ≥1.9 as 2x
-    
-    # Average allocation
-    avg_allocation = np.mean(allocations_clean)
-    
-    return {
-        'max_drawdown': float(max_drawdown),
-        'calmar_ratio': float(calmar_ratio),
-        'turnover': float(turnover),
-        'leverage_2x_rate': float(leverage_2x_rate),
-        'avg_allocation': float(avg_allocation)
-    }
-
-
 def evaluate_return_model(
     r_hat: np.ndarray,
     actual_returns: np.ndarray,
